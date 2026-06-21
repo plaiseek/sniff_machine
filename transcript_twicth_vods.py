@@ -23,10 +23,11 @@ transcription_queue = Queue()
 for item in mp3_results.items():
     transcription_queue.put(item)
 transcription_results = Queue()
-whisper_servers = [f"http://127.0.0.1:{port}/inference" for port in [8070, 8071]] + [
-    f"http://192.168.0.27:{port}/inference"
-    for port in [8072, 8073, 8074, 8075, 8076, 8077]
-]
+# whisper_servers = [
+#     f"http://192.168.0.27:{port}/inference"
+#     for port in [8070, 8071, 8072, 8073, 8074, 8075]
+# ] + [f"http://127.0.0.1:{port}/inference" for port in [8076, 8077]]
+whisper_servers = [f"http://127.0.0.1:{port}/inference" for port in [8076, 8077]]
 
 
 def transcription_loop(whisper_server):

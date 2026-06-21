@@ -5,6 +5,7 @@ import sys
 
 gfx_version = "11.0.0"
 ggml_model = "large-v3"
+vad_model = "silero-v6.2.0"
 
 dockerfile = f"""
 FROM rocm/dev-ubuntu-22.04:6.3-complete
@@ -12,7 +13,7 @@ FROM rocm/dev-ubuntu-22.04:6.3-complete
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git cmake make g++ python3 ca-certificates ffmpeg \\
     && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth=1 https://github.com/ggerganov/whisper.cpp /app
+RUN git clone --depth=1 https://github.com/ggml-org/whisper.cpp /app
 WORKDIR /app
 RUN cmake -S . -B build \\
     -DGGML_HIP=ON \\
@@ -23,7 +24,9 @@ RUN cmake -S . -B build \\
     && cmake --build build -j$(nproc) --target whisper-server
 ENV HSA_OVERRIDE_GFX_VERSION={gfx_version}
 RUN bash ./models/download-ggml-model.sh {ggml_model}
-ENTRYPOINT ["/app/build/bin/whisper-server", "--host", "0.0.0.0", "--port", "3000", "--language", "fr", "--model", "models/ggml-{ggml_model}.bin"]
+RUN bash ./models/download-vad-model.sh {vad_model}
+ENTRYPOINT ["/app/build/bin/whisper-server", "--host", "0.0.0.0", "--port", "3000", \\
+    "--model", "models/ggml-{ggml_model}.bin", "--vad-model", "models/ggml-{vad_model}.bin"]
 """
 
 

@@ -23,7 +23,7 @@ def mp3_to_srt(audio_path: Path, output_folder: str = ".", model: str = "large")
     transcribe = model.transcribe(str(audio_path))
     segments = transcribe["segments"]
 
-    os.makedirs(output_folder)
+    os.makedirs(output_folder, exist_ok=True)
     srt_path = Path(f"{output_folder}/{audio_path.stem}.srt")
     with open(srt_path, "w") as file:
         for segment in segments:
