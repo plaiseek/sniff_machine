@@ -11,14 +11,9 @@ for device, ports in gpu_instances.items():
     for port in ports:
         run_whisper_docker_image(port, device)
 
-
-def signal_handler(sig, frame):
-    print("Received SIGINT, stopping Whisper Docker images...")
+try:
+    print("Whisper Docker images started. Press Ctrl+C to stop.")
+    print_logs_of_running_containers()
+except KeyboardInterrupt:
+    print("Stopping Whisper Docker images...")
     stop_whisper_docker_images()
-    sys.exit(0)
-
-
-signal.signal(signal.SIGINT, signal_handler)
-
-print("Whisper Docker images started. Press Ctrl+C to stop.")
-signal.pause()

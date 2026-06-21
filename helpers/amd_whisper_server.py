@@ -2,6 +2,7 @@ import docker
 import io
 import os
 import sys
+import threading
 
 gfx_version = "11.0.0"
 ggml_model = "large-v3"
@@ -57,11 +58,14 @@ def build_whisper_docker_image() -> None:
         sys.exit(os.EX_CONFIG)
 
 
+running_containers = []
+
+
 def run_whisper_docker_image(port: int, rocm_device: int):
     print(f"Running amd_whisper Docker image (port={port},device={rocm_device})...")
     try:
         client = docker.from_env()
-        client.containers.run(
+        container = client.containers.run(
             "amd_whisper:latest",
             remove=False,
             detach=True,
@@ -69,15 +73,47 @@ def run_whisper_docker_image(port: int, rocm_device: int):
             environment={"ROCR_VISIBLE_DEVICES": rocm_device},
             ports={3000: port},
         )
+        running_containers.append((container, port, rocm_device))
+        return container
     except docker.errors.ContainerError as e:
         match e.exit_status:
             case 1:
                 raise Exception(e.stderr.decode("utf-8"))
 
 
-def stop_whisper_docker_images():
+def _stream_container_logs(container, port: int, rocm_device: int):
+    prefix = f"[{port},{rocm_device}]"
+    try:
+        for raw_line in container.logs(stream=True, follow=True):
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+            if line:
+                print(f"{prefix} {line}")
+    except docker.errors.NotFound:
+        pass
+
+
+def print_logs_of_running_containers():
+    threads = []
+    for container, port, rocm_device in running_containers:
+        t = threading.Thread(
+            target=_stream_container_logs,
+            args=(container, port, rocm_device),
+            daemon=True,
+        )
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+
+
+def stop_any_whisper_docker_images():
     client = docker.from_env()
     for container in client.containers.list(
         all=True, filters={"ancestor": "amd_whisper:latest"}
     ):
+        container.remove(force=True)
+
+
+def stop_whisper_docker_images():
+    for container, _, _ in running_containers:
         container.remove(force=True)

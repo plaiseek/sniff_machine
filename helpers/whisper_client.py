@@ -14,11 +14,14 @@ def mp3_to_srt(
         "response_format": "srt",
         "temperature": "0.0",
         "temperature_inc": "0.2",
+        "logprob_thold": "-0.8",
         "no_speech_thold": "0.4",
-        "no-context": "true",
-        "suppress-nst": "true",
+        "no_context": "true",
+        "suppress_nst": "true",
         "vad": "true",
-        "vad-threshold": "0.4",
+        "vad_threshold": "0.8",
+        "vad_min_silence_duration_ms" : "2000",
+        "vad_speech_pad_ms": "400",
     }
     response = requests.post(url, files=files, data=data)
     response.raise_for_status()

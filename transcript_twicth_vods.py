@@ -29,6 +29,8 @@ transcription_results = Queue()
 # ] + [f"http://127.0.0.1:{port}/inference" for port in [8076, 8077]]
 whisper_servers = [f"http://127.0.0.1:{port}/inference" for port in [8076, 8077]]
 
+# whisper_servers = [f"http://127.0.0.1:{port}/inference" for port in [8076]]
+
 
 def transcription_loop(whisper_server):
     while transcription_queue.qsize() > 0:
