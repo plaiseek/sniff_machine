@@ -53,7 +53,7 @@ def build_series(data):
     counts_dict = defaultdict(list)
 
     for video_info, transcription in data:
-        if video_info["upload_date"] < "202605":
+        if video_info["upload_date"] < "202604":
             continue
 
         timestamps.append(video_info["timestamp"])
