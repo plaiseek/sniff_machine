@@ -4,11 +4,11 @@ import os
 import sys
 import threading
 
-gfx_version = "11.0.0"
-ggml_model = "large-v3"
-vad_model = "silero-v6.2.0"
 
-dockerfile = f"""
+def build_whisper_docker_image(
+    gfx_version="11.0.0", ggml_model="large-v3", vad_model="silero-v6.2.0"
+) -> None:
+    dockerfile = f"""
 FROM rocm/dev-ubuntu-22.04:6.3-complete
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
@@ -30,8 +30,6 @@ ENTRYPOINT ["/app/build/bin/whisper-server", "--host", "0.0.0.0", "--port", "300
     "--model", "models/ggml-{ggml_model}.bin", "--vad-model", "models/ggml-{vad_model}.bin"]
 """
 
-
-def build_whisper_docker_image() -> None:
     print("Building amd_whisper Docker image...")
     client = docker.from_env()
     try:

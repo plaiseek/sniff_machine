@@ -8,7 +8,7 @@ video_urls = ls_channel_videos("https://www.youtube.com/@SardocheLol/videos") + 
 
 def download_srt(video_url):
     try:
-        srt_path = get_video_srt(video_url, output_dir="cache/sardoche_srt")
+        srt_path = get_video_srt(video_url, working_folder="cache/sardoche")
         return (video_url, srt_path)
     except Exception as e:
         print(f"Failed to download subtitles for '{video_url}':\n{e}")

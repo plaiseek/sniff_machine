@@ -4,18 +4,6 @@ from pathlib import Path
 
 
 def srt_to_transcription(srt_path: Path, output_folder: str) -> Path:
-    """Convert an SRT subtitle file to a plain text transcription format.
-
-    This function strips timestamp codes and line numbers from SRT files,
-    formatting the result as time-stamped sentences in a plain text file.
-
-    Args:
-        srt_path: Path to the source SRT file
-        output_folder: Directory where the transcribed text will be saved
-
-    Returns:
-        Path to the converted text file
-    """
     with open(srt_path, "r") as file:
         srt_content = file.read()
 
@@ -38,18 +26,6 @@ def srt_to_transcription(srt_path: Path, output_folder: str) -> Path:
 
 
 def sparsify_transcription_timecodes(path: Path, number_to_keep: int) -> None:
-    """Reduce the density of time codes in a transcription file by removing intermediate timestamps.
-
-    This function strategically removes timestamps to leave only a specified number,
-    preserving those that maximize the spacing between remaining timestamps.
-
-    Args:
-        path: Path to the transcription text file with timestamp codes
-        number_to_keep: Target number of timestamps to retain
-
-    Note:
-        Modifies the input file in place.
-    """
     with open(path, "r") as file:
         text = file.read()
         if number_to_keep < 2:
