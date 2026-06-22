@@ -1,7 +1,6 @@
 from helpers.subtitles import *
 from helpers.yt_dlp import *
 import os
-from pathlib import Path
 
 workdir = "cache/medoliie"
 
@@ -16,88 +15,6 @@ for file in os.listdir(f"{workdir}/infos"):
         transcription = load_sparsified_transcription(txt_path, 0)
 
         data.append((video_info, transcription))
-
-
-# import matplotlib.pyplot as plt
-# from collections import defaultdict
-# import re
-
-# target_words = ("pipi", "caca", "pied")
-
-
-# def count_target_words(transcription):
-#     clean = re.sub(r"[^\w\s\'-]", "", transcription.lower())
-#     words = clean.split()
-
-#     counts = {}
-#     for word in target_words:
-#         counts[word] = sum(1 for w in words if w == word)
-#     return counts
-
-
-# # Extract timestamps and word counts per video
-# timestamps = []
-# counts_dict = defaultdict(list)
-
-# for i, (video_info, transcription) in enumerate(data):
-#     if video_info["upload_date"] < "202603":
-#         continue
-#     timestamps.append(video_info["timestamp"])
-
-#     counts = count_target_words(transcription)
-
-#     for word in target_words:
-#         counts_dict[word].append(counts[word])
-
-#     # normalize by stream duration
-#     # for word in target_words:
-#     #     counts_dict[word].append(counts[word] / ((video_info["duration"]) / 3600))
-
-# sorted_indices = sorted(range(len(timestamps)), key=lambda i: timestamps[i])
-# timestamps_sorted = [timestamps[i] for i in sorted_indices]
-
-# counts_sorted = {
-#     word: [counts_dict[word][i] for i in sorted_indices] for word in target_words
-# }
-
-
-# # transform to cumulative
-# for word in target_words:
-#     for i in range(1, len(counts_sorted[word])):
-#         counts_sorted[word][i] += counts_sorted[word][i - 1]
-
-
-# # Plot
-# plt.figure(figsize=(10, 6))
-
-# plt.plot(
-#     timestamps_sorted, counts_sorted["pipi"], label=f"'pipi'", marker="o", alpha=0.7
-# )
-# plt.plot(
-#     timestamps_sorted, counts_sorted["caca"], label=f"'caca'", marker="s", alpha=0.7
-# )
-# plt.plot(
-#     timestamps_sorted, counts_sorted["pied"], label=f"'pied'", marker="x", alpha=0.7
-# )
-
-# plt.xlabel("Date")
-# plt.ylabel("Nombre total")
-# plt.title("'pipi' ou 'caca' ou 'pied' ?")
-# plt.legend()
-# plt.grid(True, linestyle="--", alpha=0.5)
-
-# # Optional: Convert x-axis to readable dates
-# from datetime import datetime
-
-# ax = plt.gca()
-# ax.set_xticks(ax.get_xticks())
-# ax.set_xticklabels(
-#     [datetime.utcfromtimestamp(ts).strftime("%Y-%m") for ts in ax.get_xticks()],
-#     rotation=45,
-# )
-
-# plt.tight_layout()
-# plt.show()
 
 
 import re
@@ -130,8 +47,6 @@ def count_regexp(text: str, pattern: re.Pattern):
     return sum(1 for _ in re.finditer(pattern, text))
 
 
-
-
 def build_series(data):
     """Extract sorted timestamps + cumulative per-word counts."""
     timestamps = []
@@ -157,7 +72,6 @@ def build_series(data):
         for i in range(1, len(counts_sorted[theme_name])):
             counts_sorted[theme_name][i] += counts_sorted[theme_name][i - 1]
 
-    # dates_sorted = [datetime.utcfromtimestamp(ts) for ts in timestamps_sorted]
     dates_sorted = [datetime.fromtimestamp(ts) for ts in timestamps_sorted]
     return dates_sorted, counts_sorted
 
@@ -244,10 +158,8 @@ def plot_word_counts(data):
     legend.get_frame().set_facecolor("white")
 
     plt.tight_layout()
-    # plt.savefig("/mnt/user-data/outputs/word_counts.png", bbox_inches="tight")
     plt.show()
 
 
 if __name__ == "__main__":
-    # `data` must be defined/loaded beforehand as a list of (video_info, transcription) tuples
     plot_word_counts(data)
