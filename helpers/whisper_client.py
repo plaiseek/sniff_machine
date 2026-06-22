@@ -48,6 +48,36 @@ def mp3_to_srt(
     output_folder: str = ".",
     language: str = "fr",
 ) -> Path:
+    """
+    Convert an MP3 file to SRT subtitle format using a remote Whisper inference server.
+
+    This function sends the MP3 file to the specified Whisper API endpoint with
+    optimized default parameters for high-quality transcription in the target language.
+    If the output `.srt` file already exists, it skips reprocessing to avoid redundant work.
+
+    Args:
+        mp3_path (Path): Path to the input MP3 audio file. Must be a valid, readable file.
+        whisper_url (str, optional): URL of the Whisper API inference endpoint.
+            Defaults to `"http://127.0.0.1:3000/inference"`.
+        output_folder (str, optional): Directory where the resulting SRT file will be saved.
+            Created if it does not exist. Defaults to current directory (`"."`).
+        language (str, optional): ISO 639-1 code for the target transcription language
+            (e.g., `"fr"` for French, `"en"` for English). Used as a hint; detection may still occur.
+            Defaults to `"fr"`.
+
+    Returns:
+        Path: Path to the generated SRT file (always `.srt`, UTF-8 encoded).
+
+    Raises:
+        ValueError: If any parameter in `data` is not in the `supported_params` list
+            (i.e., an unsupported/unknown API field was included).
+        requests.exceptions.RequestException: If the HTTP request fails (e.g., network error, 4xx/5xx response).
+
+    Example:
+        >>> srt_file = mp3_to_srt(Path("audio.mp3"), language="en")
+        >>> print(f"Transcription saved to {srt_file}")
+        Transcription saved to ./audio.en.srt
+    """
     srt_path = Path(f"{output_folder}/{mp3_path.stem}.{language}.srt")
     if not srt_path.is_file():
         files = {"file": (mp3_path.name, open(mp3_path, "rb"), "audio/mpeg")}

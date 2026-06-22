@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from helpers.subtitles import *
 from helpers.yt_dlp import *
 from helpers.whisper_client import *
 from math import log10
@@ -41,8 +42,11 @@ def transcription_loop(whisper_server):
 
         print(f"{log_prefix} Transcripting {mp3_path}...")
         try:
-            srt_path = mp3_to_srt(mp3_path, whisper_server, "cache/medoliie/subtitles", "fr")
-            transcription_results.put((video_url, srt_path))
+            srt_path = mp3_to_srt(
+                mp3_path, whisper_server, "cache/medoliie/subtitles", "fr"
+            )
+            txt_path = srt_to_transcription(srt_path, f"cache/medoliie/transcripts")
+            transcription_results.put((video_url, txt_path))
             print(f"{log_prefix} Done {srt_path}!")
         except Exception as e:
             print(f"{log_prefix} Failed to transcribe '{mp3_path}':\n{e}")
