@@ -101,7 +101,7 @@ def run_whisper_docker_image(port: int, rocm_device: int):
     Raises:
         Exception: If container fails to start (exit code 1), raises an exception with
                    the raw stderr message from Docker.
-    
+
     Note:
         - Requires `/dev/kfd` and `/dev/dri` device access for ROCm GPU support.
         - The container is *not* removed automatically (`remove=False`) so it can be managed later.
@@ -205,4 +205,3 @@ def stop_whisper_docker_images():
     """
     for container, _, _ in running_containers:
         container.remove(force=True)
-

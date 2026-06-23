@@ -47,6 +47,7 @@ def mp3_to_srt(
     whisper_url: str = "http://127.0.0.1:3000/inference",
     output_folder: str = ".",
     language: str = "fr",
+    force: bool = False,
 ) -> Path:
     """
     Convert an MP3 file to SRT subtitle format using a remote Whisper inference server.
@@ -79,35 +80,37 @@ def mp3_to_srt(
         Transcription saved to ./audio.en.srt
     """
     srt_path = Path(f"{output_folder}/{mp3_path.stem}.{language}.srt")
-    if not srt_path.is_file():
-        files = {"file": (mp3_path.name, open(mp3_path, "rb"), "audio/mpeg")}
-        data = {
-            "language": language,
-            "response_format": "srt",
-            "beam_size": "5",
-            "temperature": "0.0",
-            "temperature_inc": "0.4",
-            "entropy_thold": "2.20",
-            "logprob_thold": "-0.6",
-            "no_speech_thold": "0.4",
-            "max_context": "0",
-            "suppress_nst": "true",
-            "split_on_word": "true",
-            "vad": "true",
-            "vad_threshold": "0.6",
-            "vad_min_silence_duration_ms": "500",
-            "vad_max_speech_duration_s": "20",
-            "vad_speech_pad_ms": "400",
-        }
+    if srt_path.is_file() and not force:
+        return srt_path
+    files = {"file": (mp3_path.name, open(mp3_path, "rb"), "audio/mpeg")}
+    data = {
+        "language": language,
+        "response_format": "srt",
+        "beam_size": "5",
+        "temperature": "0.0",
+        "temperature_inc": "0.4",
+        "entropy_thold": "2.20",
+        "logprob_thold": "-0.6",
+        "no_speech_thold": "0.4",
+        "max_context": "0",
+        "suppress_nst": "true",
+        "split_on_word": "true",
+        "vad": "true",
+        "vad_threshold": "0.6",
+        "vad_min_silence_duration_ms": "500",
+        "vad_max_speech_duration_s": "20",
+        "vad_speech_pad_ms": "400",
+        "max_len": "26",
+    }
 
-        for key in data.keys():
-            if key not in supported_params:
-                raise ValueError(f"{key} not supported !")
+    for key in data.keys():
+        if key not in supported_params:
+            raise ValueError(f"{key} not supported !")
 
-        response = requests.post(whisper_url, files=files, data=data)
-        response.raise_for_status()
+    response = requests.post(whisper_url, files=files, data=data)
+    response.raise_for_status()
 
-        os.makedirs(output_folder, exist_ok=True)
-        with open(srt_path, "w", encoding="utf-8") as f:
-            f.write(response.text)
+    os.makedirs(output_folder, exist_ok=True)
+    with open(srt_path, "w", encoding="utf-8") as f:
+        f.write(response.text)
     return srt_path

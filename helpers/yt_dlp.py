@@ -31,6 +31,9 @@ def video_url_to_id(video_url: str):
     if video_url.startswith("https://www.twitch.tv/videos/"):
         id_start = video_url.find("videos/") + 7
         return "v" + video_url[id_start : id_start + 10]
+    if video_url.startswith("https://www.france.tv/"):
+        id_start = video_url.find("videos/") + 7
+        return video_url[22:].replace("/", "_")
     raise ValueError(f"Unsupported video host '{video_url}'")
 
 
@@ -74,41 +77,43 @@ def get_video_info(
     if info_path.is_file() and not force:
         with open(info_path, "r") as f:
             return json.load(f)
-    else:
-        with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
-            video_info = ydl.extract_info(video_url, download=False)
 
-        if video_id != video_info["id"]:
-            raise ValueError(
-                f"Retrieved video_id '{video_id}' is different from predicted one '{video_info['id']}' ({video_url})"
-            )
+    with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+        video_info = ydl.extract_info(video_url, download=False)
 
-        filtered_video_info = {
-            k: video_info.get(k)
-            for k in [
-                "id",
-                "title",
-                "duration",
-                "upload_date",
-                "timestamp",
-                "uploader",
-                "language",
-            ]
-        }
-        filtered_video_info["subtitles_langs"] = list(
-            video_info.get("subtitles", dict()).keys()
-        )
-        filtered_video_info["automatic_captions_langs"] = list(
-            video_info.get("automatic_captions", dict()).keys()
-        )
-        os.makedirs(info_path.parent, exist_ok=True)
-        with open(info_path, "w") as f:
-            json.dump(filtered_video_info, f)
+    # if video_id != video_info["id"]:
+    #     raise ValueError(
+    #         f"Retrieved video_id '{video_id}' is different from predicted one '{video_info['id']}' ({video_url})"
+    #     )
 
-        return filtered_video_info
+    filtered_video_info = {
+        k: video_info.get(k)
+        for k in [
+            "id",
+            "title",
+            "duration",
+            "upload_date",
+            "timestamp",
+            "uploader",
+            "language",
+        ]
+    }
+    filtered_video_info["subtitles_langs"] = list(
+        video_info.get("subtitles", dict()).keys()
+    )
+    filtered_video_info["automatic_captions_langs"] = list(
+        video_info.get("automatic_captions", dict()).keys()
+    )
+    os.makedirs(info_path.parent, exist_ok=True)
+    with open(info_path, "w") as f:
+        json.dump(filtered_video_info, f)
+
+    return filtered_video_info
 
 
-def get_video_mp3(video_url: str, working_folder: str = ".") -> Path:
+def get_video_mp3(
+    video_url: str, working_folder: str = ".", force: bool = False
+) -> Path:
     """
     Download the audio track of a video as MP3 (192 kbps) and cache locally.
 
@@ -131,22 +136,24 @@ def get_video_mp3(video_url: str, working_folder: str = ".") -> Path:
     """
     video_id = video_url_to_id(video_url)
     mp3_path = Path(f"{working_folder}/audios/{video_id}.mp3")
-    if not mp3_path.is_file():
-        with yt_dlp.YoutubeDL(
-            {
-                "quiet": True,
-                "format": "bestaudio/best",
-                "outtmpl": str(mp3_path)[:-4],
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    }
-                ],
-            }
-        ) as ydl:
-            ydl.download([video_url])
+    if mp3_path.is_file() and not force:
+        return mp3_path
+
+    with yt_dlp.YoutubeDL(
+        {
+            "quiet": True,
+            "format": "bestaudio/best",
+            "outtmpl": str(mp3_path)[:-4],
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ],
+        }
+    ) as ydl:
+        ydl.download([video_url])
     return mp3_path
 
 
@@ -245,13 +252,11 @@ def ls_channel_videos(channel_url: str) -> list:
 
     Args:
         channel_url (str): Channel URL. Must be one of:
-            - YouTube: `https://www.youtube.com/channel/{channel_id}` or
-                       `https://www.youtube.com/c/{channel_name}`
+            - YouTube: `https://www.youtube.com/@{channel_name}`
             - Twitch: `https://www.twitch.tv/{username}`
 
     Returns:
         list[str]: List of video URLs (e.g., `"https://www.youtube.com/watch?v=..."`)
-                   in chronological order (newest first).
 
     Raises:
         ValueError/yt_dlp errors if the channel is private, nonexistent, or inaccessible.
@@ -266,5 +271,6 @@ def ls_channel_videos(channel_url: str) -> list:
             "extract_flat": True,
         }
     ) as ydl:
-        info = ydl.extract_info(f"{channel_url}/videos", download=False)
+        info = ydl.extract_info(f"{channel_url}", download=False)
+        print(info)
         return [entry["url"] for entry in info["entries"]]
