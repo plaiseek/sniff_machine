@@ -1,4 +1,4 @@
-# Whisper Transcription Project
+# Sniff Machine
 
 This project provides a pipeline for automatically downloading and transcribing videos from YouTube, Twitch (and, soon, many other plateforms) using OpenAI's Whisper model deployed via Docker containers (specifically optimized for AMD GPUs).
 
