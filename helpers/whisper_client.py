@@ -84,8 +84,7 @@ def mp3_to_whisper_result(
     mp3_path: Path,
     whisper_result_path: Path,
     language: str = "fr",
-) -> None:
-    files = {"file": (mp3_path.name, open(mp3_path, "rb"), "audio/mpeg")}
+) -> None:    
     data = {
         "language": language,
         "response_format": "verbose_json",
@@ -105,13 +104,15 @@ def mp3_to_whisper_result(
         "vad_speech_pad_ms": "400",
         "max_len": "1",
     }
-
     for key in data.keys():
         if key not in supported_params:
             raise ValueError(f"{key} not supported !")
+            
+    with open(mp3_path, "rb") as mp3_file:
+        files = {"file": (mp3_path.name, mp3_file, "audio/mpeg")}
+        whisper_url = f"http://{whisper_address}/inference"
+        response = requests.post(whisper_url, files=files, data=data)
 
-    whisper_url = f"http://{whisper_address}/inference"
-    response = requests.post(whisper_url, files=files, data=data)
     response.raise_for_status()
 
     os.makedirs(whisper_result_path.parent, exist_ok=True)
@@ -131,7 +132,7 @@ def dtw_to_srt_timestamp(dtw: int) -> str:
 
 
 def whisper_result_to_srt(whisper_result_path: Path, srt_path: Path):
-    with open(whisper_result_path, "w", encoding="utf-8") as f:
+    with open(whisper_result_path, "r", encoding="utf-8") as f:
         whisper_result = json.load(f)
 
     os.makedirs(srt_path.parent, exist_ok=True)
@@ -149,30 +150,8 @@ def whisper_result_to_srt(whisper_result_path: Path, srt_path: Path):
             if len(segment["text"]) > 0
         ]
 
-        for word_with_dtw in words_with_dtw:
+        for i, word_with_dtw in enumerate(words_with_dtw, 1):
             word, word_dtw_start, word_dtw_end = word_with_dtw
             f.write(
                 f"{i}\n{dtw_to_srt_timestamp(word_dtw_start)} --> {dtw_to_srt_timestamp(word_dtw_end)}\n{word}\n\n"
             )
-
-
-        i = 1
-        segment = ""
-        segment_dtw_start = None
-        for word_with_dtw in words_with_dtw:
-            word, word_dtw_start, word_dtw_end = word_with_dtw
-            segment += word
-            if segment_dtw_start is None:
-                segment_dtw_start = word_dtw_start
-            if (
-                word.endswith(".")
-                or word.endswith(",")
-                or word.endswith("!")
-                or word.endswith("?")
-            ):
-                f.write(
-                    f"{i}\n{dtw_to_srt_timestamp(segment_dtw_start)} --> {dtw_to_srt_timestamp(word_dtw_end)}\n{segment}\n\n"
-                )
-                i += 1
-                segment = ""
-                segment_dtw_start = None

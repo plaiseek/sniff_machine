@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS contents (
 CREATE TABLE IF NOT EXISTS files (
     path TEXT PRIMARY KEY,
     content_id INTEGER NOT NULL,
-    file_type TEXT NOT NULL CHECK(file_type IN ('ytdlp_info', 'audio', 'subtitles', 'transcription')),
+    file_type TEXT NOT NULL CHECK(file_type IN ('ytdlp_info', 'mp3_audio', 'srt_subtitles', 'whisper_result', 'transcription')),
     FOREIGN KEY(content_id) REFERENCES contents(id) ON DELETE CASCADE,
     UNIQUE (content_id, file_type)
 )

@@ -1,3 +1,4 @@
+.vscode
 helpers/__pycache__
 cache
 old_cache

@@ -25,15 +25,15 @@ def srt_to_transcription(srt_path: Path, output_folder: str) -> Path:
         srt_content = file.read()
 
         result = re.sub(
-            "[1-9]\d*\n(\d{2}:\d{2}:\d{2}),\d{3}[^\n]+", "[\\1]", srt_content
+            r"[1-9]\d*\n(\d{2}:\d{2}:\d{2}),\d{3}[^\n]+", "[\\1]", srt_content
         )
-        result = re.sub("^(\[\d{2}:\d{2}:\d{2}\])", "[\\1]", result)
-        result = re.sub("\.\n\n(\[\d{2}:\d{2}:\d{2}\])", ".\n[\\1]", result)
-        result = re.sub("\[\d{2}:\d{2}:\d{2}\]\n", "", result)
-        result = re.sub("\n", " ", result)
-        result = re.sub("\ +", " ", result)
-        result = re.sub("\.\ +", ".\n", result)
-        result = re.sub("\[(\[\d{2}:\d{2}:\d{2}\])\] ", "\\1\n", result)
+        result = re.sub(r"^(\[\d{2}:\d{2}:\d{2}\])", "[\\1]", result)
+        result = re.sub(r"\.\n\n(\[\d{2}:\d{2}:\d{2}\])", ".\n[\\1]", result)
+        result = re.sub(r"\[\d{2}:\d{2}:\d{2}\]\n", "", result)
+        result = re.sub(r"\n", " ", result)
+        result = re.sub(r"\ +", " ", result)
+        result = re.sub(r"\.\ +", ".\n", result)
+        result = re.sub(r"\[(\[\d{2}:\d{2}:\d{2}\])\] ", "\\1\n", result)
 
         txt_path = Path(f"{output_folder}/{str(srt_path.stem)}.txt")
 
@@ -68,9 +68,9 @@ def load_sparsified_transcription(txt_path: Path, max_number_timecodes: int) -> 
     with open(txt_path, "r") as file:
         text = file.read()
         if max_number_timecodes < 2:
-            result = re.sub("\[\d{2}:\d{2}:\d{2}\]\n", "", text)
+            result = re.sub(r"\[\d{2}:\d{2}:\d{2}\]\n", "", text)
         else:
-            matches = re.findall("\[(\d{2}):(\d{2}):(\d{2})\]", text)
+            matches = re.findall(r"\[(\d{2}):(\d{2}):(\d{2})\]", text)
             timestamps = [int(h) * 3600 + int(m) * 60 + int(s) for h, m, s in matches]
 
             lookup_dict = {i: True for i in range(0, len(timestamps))}

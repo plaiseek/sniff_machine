@@ -10,6 +10,7 @@ import helpers.database as db
 video_urls = ls_channel_videos("https://www.twitch.tv/troublante_acide/videos")
 transcription_queue = Queue()
 failed_urls = []
+failed_transcriptions = []
 
 # whisper_servers = [
 #     f"192.168.0.27:{port}" for port in [8070, 8071, 8072, 8073, 8074, 8075]
@@ -38,6 +39,7 @@ def transcription_loop(whisper_server):
             in_db = whisper_result_path is not None
             if in_db and whisper_result_path.is_file():
                 print(f"{log_prefix(i)} Already Done.")
+                transcription_queue.task_done()
                 continue
 
             print(f"{log_prefix(i)} Transcripting {mp3_path}...")
@@ -56,7 +58,7 @@ def transcription_loop(whisper_server):
                 print(f"{log_prefix(i)} Done! -> {whisper_result_path}")
             except Exception as e:
                 print(f"{log_prefix(i)} Failed to transcribe '{mp3_path}':\n{e}")
-                failed_urls.append(video_url)
+                failed_transcriptions.append(mp3_path)
 
             transcription_queue.task_done()
 
