@@ -1,143 +1,76 @@
+import datetime
 import json
 import os
 import yt_dlp
 from pathlib import Path
 
-
-def video_url_to_id(video_url: str):
-    """
-    Extract the platform-specific video ID from a YouTube or Twitch URL.
-
-    Args:
-        video_url (str): Full URL of the video. Must be either:
-            - YouTube: `https://www.youtube.com/watch?v=<11-char-id>`
-            - Twitch: `https://www.twitch.tv/videos/<10-digit-id>`
-
-    Returns:
-        str: Canonical video ID:
-            - YouTube: 11-character base62 string (e.g., `'dQw4w9WgXcQ'`)
-            - Twitch: `'v'` prefix + 10 digits (e.g., `'v1234567890'`)
-
-    Raises:
-        ValueError: If the URL does not match supported platforms.
-
-    Example:
-        >>> video_url_to_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        'dQw4w9WgXcQ'
-    """
-    if video_url.startswith("https://www.youtube.com/watch?v="):
-        id_start = video_url.find("watch?v=") + 8
-        return video_url[id_start : id_start + 11]
-    if video_url.startswith("https://www.twitch.tv/videos/"):
-        id_start = video_url.find("videos/") + 7
-        return "v" + video_url[id_start : id_start + 10]
-    if video_url.startswith("https://www.france.tv/"):
-        id_start = video_url.find("videos/") + 7
-        return video_url[22:].replace("/", "_")
-    raise ValueError(f"Unsupported video host '{video_url}'")
+import helpers.database as db
 
 
-def get_video_info(
-    video_url: str, working_folder: str = ".", force: bool = False
-) -> dict:
-    """
-    Retrieve and cache essential metadata for a video (YouTube/Twitch).
-
-    Attempts to load pre-cached info from disk first. If unavailable or `force=True`,
-    downloads fresh metadata using `yt_dlp` and saves it as JSON.
-
-    Args:
-        video_url (str): Video URL
-        working_folder (str, optional): Root directory for caching. Defaults to `"."`.
-        force (bool, optional): If `True`, re-download metadata even if cached version exists.
-            Defaults to `False`.
-
-    Returns:
-        dict: Minimal video metadata with keys:
-            - `'id'`: Video ID
-            - `'title'`: Video title
-            - `'duration'`: Duration in seconds
-            - `'upload_date'`: Upload date as `YYYYMMDD` string
-            - `'timestamp'`: Unix timestamp of upload (int)
-            - `'uploader'`: Channel/creator name
-            - `'language'`: Primary language code (e.g., `"fr"`)
-            - `'subtitles_langs'`: List of manual subtitle languages available
-            - `'automatic_captions_langs'`: List of auto-generated caption languages
-
-    Raises:
-        ValueError: If the retrieved video ID doesn't match the expected one (data corruption risk).
-
-    Example:
-        >>> info = get_video_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        >>> print(info["title"], info["duration"])
-    """
-    video_id = video_url_to_id(video_url)
-    info_path = Path(f"{working_folder}/infos/{video_id}.json")
-
-    if info_path.is_file() and not force:
-        with open(info_path, "r") as f:
-            return json.load(f)
+def add_ytdlp_content(
+    db_conn: db.sqlite3.Connection,
+    url: str,
+    force: bool = False,
+) -> db.Content:
+    content = db.get_content_from_url(db_conn, url)
+    if content is not None:
+        info_path = db.get_content_file_path(db_conn, content.id, "ytdlp_info")
+        if info_path is not None and not force:
+            return content
 
     with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
-        video_info = ydl.extract_info(video_url, download=False)
+        info = ydl.extract_info(url, download=False)
 
-    # if video_id != video_info["id"]:
-    #     raise ValueError(
-    #         f"Retrieved video_id '{video_id}' is different from predicted one '{video_info['id']}' ({video_url})"
-    #     )
+        with open("logs", "w") as f:
+            json.dump(ydl.sanitize_info(info), f)
 
-    filtered_video_info = {
-        k: video_info.get(k)
-        for k in [
-            "id",
-            "title",
-            "duration",
-            "upload_date",
-            "timestamp",
-            "uploader",
-            "language",
-        ]
-    }
-    filtered_video_info["subtitles_langs"] = list(
-        video_info.get("subtitles", dict()).keys()
-    )
-    filtered_video_info["automatic_captions_langs"] = list(
-        video_info.get("automatic_captions", dict()).keys()
-    )
-    os.makedirs(info_path.parent, exist_ok=True)
-    with open(info_path, "w") as f:
-        json.dump(filtered_video_info, f)
+        if content is None:
+            content = db.add_content(
+                db_conn,
+                info["extractor_key"],
+                info["id"],
+                url,
+                info["title"],
+                info["duration"],
+                info["uploader"],
+                datetime.datetime.fromtimestamp(
+                    info["timestamp"], tz=datetime.timezone.utc
+                ).isoformat(),
+            )
 
-    return filtered_video_info
+        info_path = Path(
+            f"cache/ytdlp_info/{content.platform}_{content.external_id}.json"
+        )
+        os.makedirs(info_path.parent, exist_ok=True)
+        with open(info_path, "w") as f:
+            json.dump(ydl.sanitize_info(info), f)
+        db.add_content_file(db_conn, info_path, content.id, "ytdlp_info")
+
+        return content
 
 
-def get_video_mp3(
-    video_url: str, working_folder: str = ".", force: bool = False
+def get_ytdlp_content(db_conn: db.sqlite3.Connection, url: str) -> db.Content:
+    content = db.get_content_from_url(db_conn, url)
+    if content is None:
+        content = add_ytdlp_content(db_conn, url)
+    return content
+
+
+def get_ytdlp_content_mp3(
+    db_conn: db.sqlite3.Connection,
+    url: str,
+    content: db.Content | None = None,
+    force: bool = False,
 ) -> Path:
-    """
-    Download the audio track of a video as MP3 (192 kbps) and cache locally.
+    if content is None:
+        content = get_ytdlp_content(db_conn, url)
 
-    If an MP3 file for this video already exists in `working_folder/audios/`,
-    it will be reused (no re-download).
-
-    Args:
-        video_url (str): Video URL
-        working_folder (str, optional): Root directory for audio cache. Defaults to `"."`.
-
-    Returns:
-        Path: Absolute path to the downloaded `.mp3` file.
-
-    Raises:
-        Any errors from `yt_dlp` (e.g., network issues, private content).
-
-    Example:
-        >>> mp3_path = get_video_mp3("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
-        >>> print(f"Audio saved at: {mp3_path}")
-    """
-    video_id = video_url_to_id(video_url)
-    mp3_path = Path(f"{working_folder}/audios/{video_id}.mp3")
-    if mp3_path.is_file() and not force:
+    mp3_path = db.get_content_file_path(db_conn, content.id, "audio")
+    if mp3_path is not None and not force:
         return mp3_path
+
+    if mp3_path is None:
+        mp3_path = Path(f"cache/audio/{content.platform}_{content.external_id}.mp3")
 
     with yt_dlp.YoutubeDL(
         {
@@ -153,118 +86,51 @@ def get_video_mp3(
             ],
         }
     ) as ydl:
-        ydl.download([video_url])
-    return mp3_path
+        ydl.download([url])
+        db.add_content_file(db_conn, mp3_path, content.id, "audio")
+        return mp3_path
 
 
-def get_video_srt(
-    video_url: str,
-    video_info: dict | None = None,
+def get_ytdlp_content_srt(
+    url: str,
+    db_conn: db.sqlite3.Connection,
+    content: db.Content | None = None,
     lang: str = "fr",
-    working_folder: str = ".",
-    filename_tmpl: str = "{id}",
+    force: bool = False,
+    automatic_sub: bool = False,
 ) -> Path:
-    """
-    Download subtitles for a video in `.srt` format (manual → auto-generated fallback).
+    if content is None:
+        content = get_ytdlp_content(db_conn, url)
 
-    Caches subtitle files as `{working_folder}/subtitles/{name}.{lang}.srt`.
-    Uses `video_info` to generate filenames and check available languages.
-    Prioritizes human-curated subtitles over automatic captions.
+    srt_path = db.get_content_file_path(db_conn, content.id, "mp3")
+    if srt_path is not None and not force:
+        return srt_path
 
-    Args:
-        video_url (str): Video URL
-        video_info (dict | None, optional): Pre-fetched metadata dict from `get_video_info()`.
-            If `None`, metadata will be fetched automatically. Defaults to `None`.
-        lang (str, optional): Target language code (ISO 639-1, e.g., `"en"`, `"fr"`).
-            Defaults to `"fr"`.
-        working_folder (str, optional): Root directory for subtitle cache. Defaults to `"."`.
-        filename_tmpl (str, optional): Template for output filenames.
-            Supports placeholders from `video_info` (e.g., `"{title}_{id}"` → `"My Video_dQw4..."`).
-            Defaults to `"{id}"`.
-
-    Returns:
-        Path: Absolute path to the downloaded `.srt` file.
-
-    Raises:
-        ValueError: If the language is unsupported OR placeholders in `filename_tmpl` are invalid.
-
-    Example:
-        >>> srt_path = get_video_srt("https://www.youtube.com/watch?v=dQw4w9WgXcQ", lang="en")
-        >>> print(f"Subtitles saved at: {srt_path}")
-    """
-    if video_info is None:
-        video_info = get_video_info(video_url)
-
-    try:
-        name = filename_tmpl.format(**video_info)
-    except KeyError as e:
-        raise ValueError(
-            f"Unknown placeholder {e} in filename_template. "
-            f"Supported placeholders: {sorted(video_info)}"
+    if srt_path is None:
+        srt_path = Path(
+            f"cache/subtitles/{content.platform}_{content.external_id}.{lang}.srt"
         )
+    with yt_dlp.YoutubeDL(
+        {
+            "quiet": True,
+            "skip_download": True,
+            "writesubtitles": True,
+            "writeautomaticsub": automatic_sub,
+            "subtitleslangs": [lang],
+            "subtitlesformat": "srt",
+            "outtmpl": str(srt_path)[: -(5 + len(lang))],
+        }
+    ) as ydl:
+        ydl.download([url])
 
-    srt_path = Path(f"{working_folder}/subtitles/{name}.{lang}.srt")
     if not srt_path.is_file():
-        manual_subs = video_info["subtitles_langs"]
-        auto_subs = video_info["automatic_captions_langs"]
+        raise ValueError("It seems there are no subtitles for '{lang}'")
 
-        if lang in manual_subs:
-            print(f"Downloading manual subtitles for '{lang}'...")
-            with yt_dlp.YoutubeDL(
-                {
-                    "quiet": True,
-                    "skip_download": True,
-                    "writesubtitles": True,
-                    "subtitleslangs": [lang],
-                    "subtitlesformat": "srt",
-                    "outtmpl": str(srt_path)[: -(5 + len(lang))],
-                }
-            ) as ydl:
-                ydl.download([video_url])
-        elif lang in auto_subs:
-            print(
-                f"Manual subtitles not available for '{lang}', falling back to auto-generated captions..."
-            )
-            with yt_dlp.YoutubeDL(
-                {
-                    "quiet": True,
-                    "skip_download": True,
-                    "writeautomaticsub": True,
-                    "subtitleslangs": [lang],
-                    "subtitlesformat": "srt",
-                    "outtmpl": str(srt_path)[: -(5 + len(lang))],
-                }
-            ) as ydl:
-                ydl.download([video_url])
-        else:
-            raise ValueError(
-                f"No subtitles (manual or auto-generated) found for language '{lang}'. "
-                f"Available languages: {set(manual_subs + auto_subs)}"
-            )
+    db.add_content_file(db_conn, srt_path, content.id, "subtitles")
     return srt_path
 
 
 def ls_channel_videos(channel_url: str) -> list:
-    """
-    List all publicly available video URLs from a channel (YouTube/Twitch).
-
-    Uses `yt_dlp`'s flat-listing mode (`extract_flat`) to avoid downloading full metadata.
-
-    Args:
-        channel_url (str): Channel URL. Must be one of:
-            - YouTube: `https://www.youtube.com/@{channel_name}`
-            - Twitch: `https://www.twitch.tv/{username}`
-
-    Returns:
-        list[str]: List of video URLs (e.g., `"https://www.youtube.com/watch?v=..."`)
-
-    Raises:
-        ValueError/yt_dlp errors if the channel is private, nonexistent, or inaccessible.
-
-    Example:
-        >>> videos = ls_channel_videos("https://www.youtube.com/c/LinusTechTips")
-        >>> print(f"Found {len(videos)} public videos.")
-    """
     with yt_dlp.YoutubeDL(
         {
             "quiet": True,
@@ -272,5 +138,5 @@ def ls_channel_videos(channel_url: str) -> list:
         }
     ) as ydl:
         info = ydl.extract_info(f"{channel_url}", download=False)
-        print(info)
+        # print(info)
         return [entry["url"] for entry in info["entries"]]

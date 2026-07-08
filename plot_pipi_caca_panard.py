@@ -2,7 +2,7 @@ from helpers.subtitles import *
 from helpers.yt_dlp import *
 import os
 
-workdir = "cache/medoliie"
+workdir = "old_cache/medoliie"
 
 data = []
 for file in os.listdir(f"{workdir}/infos"):
@@ -11,7 +11,7 @@ for file in os.listdir(f"{workdir}/infos"):
         with open(info_path) as f:
             video_info = json.load(f)
 
-        txt_path = f"cache/medoliie/transcripts/{video_info['id']}.fr.txt"
+        txt_path = f"old_cache/medoliie/transcripts/{video_info['id']}.fr.txt"
         transcription = load_sparsified_transcription(txt_path, 0)
 
         data.append((video_info, transcription))
@@ -25,20 +25,30 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
 themes = {
-    "pipi": {
-        "regexp": re.compile("pipi", re.IGNORECASE),
+    "pipi/pisser": {
+        "regexp": re.compile("[^a-z](pipis?|pisser?)[^a-z]", re.IGNORECASE),
         "color": "#FF6B6B",
         "marker": "o",
     },
-    "caca": {
-        "regexp": re.compile("caca", re.IGNORECASE),
+    "caca/chier": {
+        "regexp": re.compile("[^a-z](cacas?|chier?)[^a-z]", re.IGNORECASE),
+        "color": "#CF7226",
+        "marker": "v",
+    },
+    "panard/pied": {
+        "regexp": re.compile("[^a-z](pieds?|panards?)[^a-z]", re.IGNORECASE),
+        "color": "#51CF66",
+        "marker": "^",
+    },
+    "prout/pet/péter": {
+        "regexp": re.compile("[^a-z](pets?|prout(s|er|es|e|ons|ent)?|p(é|è)t(er|e|es|ons|ent)?)[^a-z]", re.IGNORECASE),
         "color": "#4D96FF",
         "marker": "s",
     },
-    "panard": {
-        "regexp": re.compile("(pied|panard)", re.IGNORECASE),
-        "color": "#51CF66",
-        "marker": "^",
+    "OST": {
+        "regexp": re.compile("[^a-z]OST[^a-z]", re.IGNORECASE),
+        "color": "#C551CF",
+        "marker": "d",
     },
 }
 
@@ -126,7 +136,7 @@ def plot_word_counts(data):
 
     # Titles & labels
     ax.set_title(
-        "Médolie : « pipi », « caca » ou « panard » ?",
+        "Médolie : « pipi » vs « caca » vs « panard » vs « prout » vs « OST »",
         fontsize=18,
         fontweight="bold",
         pad=16,
