@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, wait
+from helpers.ffmpeg import *
 from helpers.subtitles import *
 from helpers.yt_dlp import *
 from helpers.whisper_client import *
@@ -31,7 +32,7 @@ def transcription_loop(whisper_server):
             if item is None:
                 transcription_queue.task_done()
                 return
-            i, content, mp3_path = item
+            i, content, wav_path = item
 
             whisper_result_path = db.get_content_file_path(
                 db_conn, content.id, "whisper_result"
@@ -42,14 +43,14 @@ def transcription_loop(whisper_server):
                 transcription_queue.task_done()
                 continue
 
-            print(f"{log_prefix(i)} Transcripting {mp3_path}...")
+            print(f"{log_prefix(i)} Transcripting {wav_path}...")
             try:
                 if not in_db:
                     whisper_result_path = Path(
                         f"cache/whisper_result/{content.platform}_{content.external_id}.json"
                     )
                 mp3_to_whisper_result(
-                    whisper_server, mp3_path, whisper_result_path, "fr"
+                    whisper_server, wav_path, whisper_result_path, "fr"
                 )
                 if not in_db:
                     db.add_content_file(
@@ -57,8 +58,8 @@ def transcription_loop(whisper_server):
                     )
                 print(f"{log_prefix(i)} Done! -> {whisper_result_path}")
             except Exception as e:
-                print(f"{log_prefix(i)} Failed to transcribe '{mp3_path}':\n{e}")
-                failed_transcriptions.append(mp3_path)
+                print(f"{log_prefix(i)} Failed to transcribe '{wav_path}':\n{e}")
+                failed_transcriptions.append(wav_path)
 
             transcription_queue.task_done()
 
@@ -72,6 +73,15 @@ with ThreadPoolExecutor() as consumer_pool:
                 print(f"{log_prefix(i)} Fetching {video_url}...")
                 content = get_ytdlp_content(db_conn, video_url)
                 mp3_path = get_ytdlp_content_mp3(db_conn, video_url, content)
+
+                wav_path = db.get_content_file_path(db_conn, content.id, "16k_mono_wav")
+                if wav_path is None:
+                    wav_path = Path(
+                        f"cache/16k_mono_wav/{content.platform}_{content.external_id}.wav"
+                    )
+                    convert_to_16k_mono_wav(mp3_path, wav_path, verbose=False)
+                    db.add_content_file(db_conn, wav_path, content.id, "16k_mono_wav")
+
                 transcription_queue.put((i, content, mp3_path))
             except Exception as e:
                 print(f"Failed to download audio for '{video_url}':\n{e}")

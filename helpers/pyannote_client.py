@@ -1,8 +1,11 @@
+from pathlib import Path
+
+import json
 import requests
 import sys
 
 
-def assert_wtpsplit_servers(addresses: list):
+def assert_pyannote_servers(addresses: list):
     for address in addresses:
         url = f"http://{address}/ready"
         print(f"Checking {url}...")
@@ -14,23 +17,20 @@ def assert_wtpsplit_servers(addresses: list):
             sys.exit()
 
 
-def text_to_sentences(wtpsplit_address: str, text: str) -> list:
-    wtpsplit_url = f"http://{wtpsplit_address}/split"
-    response = requests.post(
-        wtpsplit_url,
-        json={
-            "text_or_texts": text,
-            "verbose": True,
-            "split_on_input_newlines": False,
-            "weighting": "hat",
-            "stride": 32,
-            # "max_length": 256
-        },
-    )
+def mp3_to_pyannote_result(pyannote_address: str, mp3_path: Path) -> None:
+    params = {"num_speakers": 2}
+    with open(mp3_path, "rb") as mp3_file:
+        files = {"file": (mp3_path.name, mp3_file, "audio/mpeg")}
+        pyannote_url = f"http://{pyannote_address}/diarize"
+        response = requests.post(
+            pyannote_url,
+            files=files,
+            data={"params": json.dumps(params)},
+        )
     try:
         response.raise_for_status()
     except requests.exceptions.HTTPError as e:
         raise requests.exceptions.HTTPError(
             f"{e}\nServer said: {response.text}", response=response
         ) from None
-    return response.json()["sentences"]
+    return response.json()["diarization"]

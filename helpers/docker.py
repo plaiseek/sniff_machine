@@ -33,15 +33,9 @@ def build_image(image_tag: str, dockerfile: str) -> None:
 
 
 def run_container(image_tag: str, params: dict):
-    print(f"Running {image_tag} Docker container ({params})...")
-    try:
-        client = docker.from_env()
-        container = client.containers.run(image_tag, remove=False, detach=True, **params)
-        return container
-    except docker.errors.ContainerError as e:
-        match e.exit_status:
-            case 1:
-                raise Exception(e.stderr.decode("utf-8"))
+    print(f"Running {image_tag} Docker container ({params})")
+    client = docker.from_env()
+    return client.containers.run(image_tag, remove=False, **params)
 
 
 def _stream_container_logs(container, log_prefix):

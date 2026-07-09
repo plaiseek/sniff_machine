@@ -33,44 +33,43 @@ accepted_params = {{
     "prior_kwargs": dict,
     "algorithm": str,
 }}
-
 def verify_params(params: dict) -> list:
     errors = []
     if "text_or_texts" not in params:
         errors.append(f"Missing key 'text_or_texts'.")
-    for key in params:
+    for key, value in params.items():
         if key not in accepted_params:
             errors.append(f"Unknown key '{{key}}'.")
-    for key, value in params.items():
-        if key in accepted_params:
-            expected_type = accepted_params[key]
-            if type(value) is not expected_type:
-                errors.append(
-                    f"Key '{{key}}' expects type '{{expected_type.__name__}}' "
-                    f"but received '{{type(value).__name__}}'."
-                )
+            continue
+        expected_type = accepted_params[key]
+        if type(value) is not expected_type:
+            errors.append(
+                f"Key '{{key}}' expects type '{{expected_type.__name__}}' "
+                f"but received '{{type(value).__name__}}'."
+            )
     return errors
 
+@app.route("/ready", methods=["GET"])
+def ready():
+    return {{}}
+    
 @app.route("/split", methods=["POST"])
 def split():
     params = request.get_json() or {{}}
-    text = params.get("text", "")
-    errors = verify_params(params)
-    if errors:
-        err_msg = ", ".join(errors)
-        print(err_msg)
-        return err_msg, 400
+    if errors := verify_params(params):
+        print(errors)
+        return jsonify({{"error": ", ".join(errors)}}), 400
     return jsonify({{"sentences": sat.split(**params)}})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
 """
-    encoded = base64.b64encode(server_script.encode()).decode()
+    base64_server_script = base64.b64encode(server_script.encode()).decode()
     dockerfile = f"""
 FROM rocm/pytorch:latest
-RUN pip install flask wtpsplit gunicorn
+RUN pip install flask gunicorn wtpsplit
 RUN python -c "from wtpsplit import SaT; SaT('{sat_model}')"
-RUN mkdir -p /app && echo {encoded} | base64 -d > /app/wtpsplit_server.py
+RUN mkdir -p /app && echo {base64_server_script} | base64 -d > /app/wtpsplit_server.py
 # ENTRYPOINT ["python", "/app/wtpsplit_server.py"]
 WORKDIR /app
 ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "120", "-b", "0.0.0.0:3000", "wtpsplit_server:app"]
@@ -78,10 +77,11 @@ ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "120", "-b", "
     dk.build_image("amd_wtpsplit:latest", dockerfile)
 
 
-def run_wtpsplit_container(port: int, rocm_device: int):
+def run_wtpsplit_container(port: int, rocm_device: int = 0):
     return dk.run_container(
         "amd_wtpsplit:latest",
         {
+            "detach": True,
             "devices": ["/dev/kfd", "/dev/dri"],
             "environment": {"ROCR_VISIBLE_DEVICES": rocm_device},
             "ports": {3000: port},

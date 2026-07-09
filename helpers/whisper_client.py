@@ -6,35 +6,16 @@ import requests
 import sys
 
 
-class IncorrectWhisperServer(Exception):
-    def __init__(self, address: str, message: str = ""):
-        super().__init__(message)
-        self.address = address
-        self.message = message
-
-    def __str__(self):
-        return f"'{self.address}' is not a Whisper.cpp server" + (
-            f":\n{self.message}" if len(self.message) > 0 else "."
-        )
-
-
-def try_whisper_server(address: str) -> bool:
-    url = f"http://{address}"
-    print(f"Checking {url}...")
-    try:
-        r = requests.get(url, timeout=5)
-        r.raise_for_status()
-        if "<h1>Whisper.cpp Server</h1>" not in r.text:
-            raise IncorrectWhisperServer(address)
-    except requests.exceptions.RequestException as e:
-        raise IncorrectWhisperServer(address, str(e))
-
-
 def assert_whisper_servers(addresses: list):
     for address in addresses:
+        url = f"http://{address}/ready"
+        print(f"Checking {url}...")
         try:
-            try_whisper_server(address)
-        except IncorrectWhisperServer as e:
+            r = requests.get(url, timeout=5)
+            r.raise_for_status()
+            if "<h1>Whisper.cpp Server</h1>" not in r.text:
+                raise Exception(f"Unexpected Whisper.cpp response: {r.text}")
+        except requests.exceptions.RequestException as e:
             print(e)
             sys.exit()
 
@@ -84,7 +65,7 @@ def mp3_to_whisper_result(
     mp3_path: Path,
     whisper_result_path: Path,
     language: str = "fr",
-) -> None:    
+) -> None:
     data = {
         "language": language,
         "response_format": "verbose_json",
@@ -107,7 +88,7 @@ def mp3_to_whisper_result(
     for key in data.keys():
         if key not in supported_params:
             raise ValueError(f"{key} not supported !")
-            
+
     with open(mp3_path, "rb") as mp3_file:
         files = {"file": (mp3_path.name, mp3_file, "audio/mpeg")}
         whisper_url = f"http://{whisper_address}/inference"

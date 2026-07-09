@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 db_path = pathlib.Path("cache/test.db")
 
+
 def connect():
     os.makedirs(pathlib.Path(db_path).parent, exist_ok=True)
     db_conn = sqlite3.connect(str(db_path))
@@ -37,7 +38,7 @@ CREATE TABLE IF NOT EXISTS contents (
 CREATE TABLE IF NOT EXISTS files (
     path TEXT PRIMARY KEY,
     content_id INTEGER NOT NULL,
-    file_type TEXT NOT NULL CHECK(file_type IN ('ytdlp_info', 'mp3_audio', 'srt_subtitles', 'whisper_result', 'transcription')),
+    file_type TEXT NOT NULL CHECK(file_type IN ('ytdlp_info', 'ytdlp_audio', 'ytdlp_subtitles', '16k_mono_wav', 'whisper_result', 'pyannote_result')),
     FOREIGN KEY(content_id) REFERENCES contents(id) ON DELETE CASCADE,
     UNIQUE (content_id, file_type)
 )

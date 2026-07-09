@@ -10,7 +10,7 @@ This project provides a pipeline for automatically downloading and transcribing 
 
 2. **Python Dependencies**:
    ```bash
-   pip install sqlite-vec yt-dlp whisper docker requests onnxruntime wtpsplit[onnx-cpu]
+   pip install sqlite-vec yt-dlp docker requests onnxruntime wtpsplit[onnx-cpu]
    ```
 
 3. JS runtime for YT_DLP: 
@@ -39,10 +39,9 @@ This project provides a pipeline for automatically downloading and transcribing 
 
 ## TODO
 
-1. Refactor the usage of YT_DLP to follow `https://github.com/yt-dlp/yt-dlp#embedding-examples`
-2. Find a way to retrieve (or scrap) Videos list of france.tv etc...
-3. Try pyannote for Diarization
-4. Find a way to identify speakers (voice recognition for famous people, LLM analysis for others when presented in text)
+1. Find a way to retrieve (or scrap) Videos list of france.tv etc...
+2. Implement a pyannote pipeline for diarization
+3. Implement a SpeechBrain pipeline for speacker recognition
 
 ### Potential medias
 

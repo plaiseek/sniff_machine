@@ -62,12 +62,12 @@ def get_ytdlp_content_mp3(
     if content is None:
         content = get_ytdlp_content(db_conn, url)
 
-    mp3_path = db.get_content_file_path(db_conn, content.id, "mp3_audio")
+    mp3_path = db.get_content_file_path(db_conn, content.id, "ytdlp_audio")
     if mp3_path is not None and not force:
         return mp3_path
 
     if mp3_path is None:
-        mp3_path = Path(f"cache/mp3_audio/{content.platform}_{content.external_id}.mp3")
+        mp3_path = Path(f"cache/ytdlp_audio/{content.platform}_{content.external_id}.mp3")
 
     with yt_dlp.YoutubeDL(
         {
@@ -84,7 +84,7 @@ def get_ytdlp_content_mp3(
         }
     ) as ydl:
         ydl.download([url])
-        db.add_content_file(db_conn, mp3_path, content.id, "mp3_audio")
+        db.add_content_file(db_conn, mp3_path, content.id, "ytdlp_audio")
         return mp3_path
 
 
@@ -99,13 +99,13 @@ def get_ytdlp_content_srt(
     if content is None:
         content = get_ytdlp_content(db_conn, url)
 
-    srt_path = db.get_content_file_path(db_conn, content.id, "srt_subtitles")
+    srt_path = db.get_content_file_path(db_conn, content.id, "ytdlp_subtitles")
     if srt_path is not None and not force:
         return srt_path
 
     if srt_path is None:
         srt_path = Path(
-            f"cache/srt_subtitles/{content.platform}_{content.external_id}.{lang}.srt"
+            f"cache/ytdlp_subtitles/{content.platform}_{content.external_id}.{lang}.srt"
         )
     with yt_dlp.YoutubeDL(
         {
@@ -123,7 +123,7 @@ def get_ytdlp_content_srt(
     if not srt_path.is_file():
         raise ValueError(f"It seems there are no subtitles for '{lang}'")
 
-    db.add_content_file(db_conn, srt_path, content.id, "srt_subtitles")
+    db.add_content_file(db_conn, srt_path, content.id, "ytdlp_subtitles")
     return srt_path
 
 
