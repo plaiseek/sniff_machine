@@ -34,6 +34,7 @@ def run_whisper_container(port: int, rocm_device: int):
     return dk.run_container(
         "amd_whisper:latest",
         {
+            "detach": True,
             "devices": ["/dev/kfd", "/dev/dri"],
             "environment": {"ROCR_VISIBLE_DEVICES": rocm_device},
             "ports": {3000: port},
