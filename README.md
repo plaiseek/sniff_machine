@@ -31,17 +31,22 @@ Python clients for these servers live in [helpers/](helpers/) (`whisper_client.p
 
 1. **Docker Desktop**: [https://docs.docker.com/desktop/](https://docs.docker.com/desktop/)
 
-2. **Python Dependencies**:
+2. **FFmpeg** (used by yt-dlp for audio extraction and for the 16 kHz mono wav conversion):
+   ```bash
+   sudo apt install ffmpeg
+   ```
+
+3. **Python Dependencies**:
    ```bash
    pip install sqlite-vec yt-dlp docker requests
    ```
 
-3. **JS runtime for yt-dlp**:
+4. **JS runtime for yt-dlp**:
 
    [https://docs.deno.com/runtime/getting_started/installation/](https://docs.deno.com/runtime/getting_started/installation/)
    [https://github.com/yt-dlp/yt-dlp/wiki/EJS#option-1-install-the-yt-dlp-ejs-python-package](https://github.com/yt-dlp/yt-dlp/wiki/EJS#option-1-install-the-yt-dlp-ejs-python-package)
 
-4. **Hugging Face token** (for Pyannote only): accept the conditions of [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1), then put your token in a `hf.token` file at the root of the project.
+5. **Hugging Face token** (for Pyannote only): accept the conditions of [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1), then put your token in a `hf.token` file at the root of the project.
 
 ## Usage
 

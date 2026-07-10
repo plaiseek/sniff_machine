@@ -21,7 +21,7 @@ def convert_to_16k_mono_wav(input_path: Path, output_path: Path, verbose: bool =
         "-map",
         "0:a:0",
         "-af",
-        "aresample=async=1",
+        "aresample=async=1:resampler=soxr",
         "-ac",
         "1",
         "-ar",
