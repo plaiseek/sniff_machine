@@ -70,12 +70,13 @@ def verify_params(params: dict) -> list:
             if len(errors) >= 10:
                 break
     # Too short chunks crash the model's convolutions; a long turn is split in chunks of at least max_duration / 2
+    # (written so that NaN and Infinity, which json.loads accepts, fail too)
     min_duration = params.get("min_duration", 1.0)
     max_duration = params.get("max_duration", 30.0)
-    if min_duration < 0.1:
-        errors.append("'min_duration' must be >= 0.1.")
-    if max_duration < 1.0 or max_duration < min_duration:
-        errors.append("'max_duration' must be >= 1.0 and >= 'min_duration'.")
+    if not 0.1 <= min_duration < math.inf:
+        errors.append("'min_duration' must be a finite number >= 0.1.")
+    if not (1.0 <= max_duration < math.inf and max_duration >= min_duration):
+        errors.append("'max_duration' must be a finite number >= 1.0 and >= 'min_duration'.")
     if params.get("batch_size", 16) < 1:
         errors.append("'batch_size' must be >= 1.")
     return errors
@@ -106,10 +107,13 @@ def embed_chunks(audio_file: sf.SoundFile, chunks: list, batch_size: int) -> dic
         batch = chunks[b : b + batch_size]
         wavs = [read_chunk(audio_file, start, end) for _, start, end in batch]
         max_len = max(len(wav) for wav in wavs)
-        padded = torch.zeros(len(wavs), max_len)
-        for j, wav in enumerate(wavs):
-            padded[j, : len(wav)] = torch.from_numpy(wav)
-        wav_lens = torch.tensor([len(wav) / max_len for wav in wavs])  # padding is masked
+        # wav_lens only masks the statistics (normalisation, pooling): the convolutions still see the
+        # padding, so a chunk is padded with its own audio rather than with zeros. Otherwise its
+        # embedding would depend on the other chunks of the batch.
+        padded = torch.from_numpy(
+            np.stack([np.pad(wav, (0, max_len - len(wav)), mode="wrap") for wav in wavs])
+        )
+        wav_lens = torch.tensor([len(wav) / max_len for wav in wavs])
         with torch.inference_mode():
             embeddings = classifier.encode_batch(padded, wav_lens).squeeze(1)  # (batch, 1, dim) -> (batch, dim)
         embeddings = torch.nn.functional.normalize(embeddings.float(), dim=-1).cpu().numpy()

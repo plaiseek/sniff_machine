@@ -12,6 +12,9 @@ def assert_pyannote_servers(addresses: list):
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
+        except requests.exceptions.ReadTimeout:
+            # The server's only worker is busy (or still loading the model): requests will wait for it
+            print(f"Pyannote server {address} is busy or still loading.")
         except requests.exceptions.RequestException as e:
             sys.exit(f"Pyannote server {address} is not ready: {e}")
 

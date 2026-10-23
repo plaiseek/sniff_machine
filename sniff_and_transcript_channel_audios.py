@@ -36,20 +36,17 @@ def transcription_loop(whisper_server):
             try:
                 item = transcription_queue.get(timeout=1)
             except Empty:
-                if downloads_done.is_set():
+                # Stop once downloads are over and no other worker can still hand an item back
+                if downloads_done.is_set() and transcription_queue.unfinished_tasks == 0:
                     return
                 continue
             i, content, wav_path = item
 
-            if db.get_existing_content_file(db_conn, content.id, "whisper_result"):
-                print(f"{log_prefix(i)} Already Done.")
-                continue
-
-            print(f"{log_prefix(i)} [{whisper_server}] Transcribing {wav_path}...")
-            whisper_result_path = Path(
-                f"cache/whisper_result/{content.platform}_{content.external_id}.json"
-            )
             try:
+                print(f"{log_prefix(i)} [{whisper_server}] Transcribing {wav_path}...")
+                whisper_result_path = Path(
+                    f"cache/whisper_result/{content.platform}_{content.external_id}.json"
+                )
                 wav_to_whisper_result(
                     whisper_server, wav_path, whisper_result_path, "fr"
                 )
@@ -67,6 +64,9 @@ def transcription_loop(whisper_server):
             except Exception as e:
                 print(f"{log_prefix(i)} Failed to transcribe '{wav_path}':\n{e}")
                 failed_transcriptions.append((wav_path, e))
+            finally:
+                # After the hand-back put(): the count never drops to 0 while the item is pending
+                transcription_queue.task_done()
 
 
 # Daemon threads: Ctrl+C stops the script at once instead of waiting for the transcriptions in progress
@@ -86,12 +86,17 @@ try:
                 content = get_ytdlp_content(db_conn, video_url)
                 if content.id in queued_content_ids:
                     continue
-                mp3_path = get_ytdlp_content_mp3(db_conn, video_url, content)
+                if db.get_existing_content_file(db_conn, content.id, "whisper_result"):
+                    print(f"{log_prefix(i)} Already Done.")
+                    queued_content_ids.add(content.id)
+                    continue
 
+                # The mp3 is only needed to (re)build the wav: it can be deleted once the wav exists
                 wav_path = db.get_existing_content_file(
                     db_conn, content.id, "16k_mono_wav"
                 )
                 if wav_path is None:
+                    mp3_path = get_ytdlp_content_mp3(db_conn, video_url, content)
                     wav_path = Path(
                         f"cache/16k_mono_wav/{content.platform}_{content.external_id}.wav"
                     )

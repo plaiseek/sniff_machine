@@ -9,6 +9,9 @@ def assert_wtpsplit_servers(addresses: list):
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
+        except requests.exceptions.ReadTimeout:
+            # The server's only worker is busy (or still loading the model): requests will wait for it
+            print(f"Wtpsplit server {address} is busy or still loading.")
         except requests.exceptions.RequestException as e:
             sys.exit(f"Wtpsplit server {address} is not ready: {e}")
 

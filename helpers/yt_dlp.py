@@ -30,7 +30,11 @@ def add_ytdlp_content(
         if db.get_existing_content_file(db_conn, content.id, "ytdlp_info") is not None:
             return content
 
-    with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
+    # noplaylist: a watch?v=X&list=Y URL is video X; extract_flat: a real playlist is rejected
+    # after one request instead of extracting all its entries first
+    with yt_dlp.YoutubeDL(
+        {"quiet": True, "noplaylist": True, "extract_flat": "in_playlist"}
+    ) as ydl:
         info = ydl.extract_info(url, download=False)
 
         if info.get("_type") in ("playlist", "multi_video"):
@@ -104,6 +108,7 @@ def get_ytdlp_content_mp3(
     with yt_dlp.YoutubeDL(
         {
             "quiet": True,
+            "noplaylist": True,
             "format": "bestaudio/best",
             "outtmpl": str(mp3_path)[:-4],
             "postprocessors": [
@@ -145,6 +150,7 @@ def get_ytdlp_content_srt(
     with yt_dlp.YoutubeDL(
         {
             "quiet": True,
+            "noplaylist": True,
             "skip_download": True,
             "writesubtitles": True,
             "writeautomaticsub": automatic_sub,

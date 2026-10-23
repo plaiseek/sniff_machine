@@ -48,7 +48,7 @@ themes = {
         "marker": "^",
     },
     "prout/pet/péter": {
-        "regexp": word_regexp("pets?|prout(s|er|es|e|ons|ent)?|p(é|è)t(er|e|es|ons|ent)?"),
+        "regexp": word_regexp("pets?|prout(s|er|es|e|ons|ent)?|p(é|è)t(er|e|es|ons|ent|é|és|ée|ées)?"),
         "color": "#4D96FF",
         "marker": "s",
     },

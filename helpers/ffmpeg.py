@@ -47,13 +47,18 @@ def convert_to_16k_mono_wav(input_path: Path, output_path: Path, verbose: bool =
             print(f"[ffmpeg] {line}", flush=True)
 
     buffer = ""
-    for char in iter(lambda: proc.stderr.read(1), ""):
-        if char in ("\n", "\r"):
-            if buffer.strip():
-                log(buffer.strip())
-            buffer = ""
-        else:
-            buffer += char
+    try:
+        for char in iter(lambda: proc.stderr.read(1), ""):
+            if char in ("\n", "\r"):
+                if buffer.strip():
+                    log(buffer.strip())
+                buffer = ""
+            else:
+                buffer += char
+    except BaseException:
+        # e.g. KeyboardInterrupt: don't leave ffmpeg running in the background
+        proc.kill()
+        raise
     if buffer.strip():
         log(buffer.strip())
 

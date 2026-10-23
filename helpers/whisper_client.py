@@ -127,8 +127,8 @@ def whisper_result_to_srt(whisper_result_path: Path, srt_path: Path):
                 continue
             words = segment.get("words") or []
             if len(words) > 0 and words[0]["t_dtw"] >= 0 and words[-1]["t_dtw"] >= 0:
-                dtw_start = words[0]["t_dtw"] + int(100 * (segment["start"] - words[0]["start"]))
-                dtw_end = words[-1]["t_dtw"] + int(100 * (segment["end"] - words[-1]["end"]))
+                dtw_start = words[0]["t_dtw"] + round(100 * (segment["start"] - words[0]["start"]))
+                dtw_end = words[-1]["t_dtw"] + round(100 * (segment["end"] - words[-1]["end"]))
             else:
                 # No word or no DTW timestamp (t_dtw = -1): use the segment times
                 dtw_start, dtw_end = round(100 * segment["start"]), round(100 * segment["end"])

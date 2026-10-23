@@ -2,6 +2,8 @@
 
 Reviewed at commit `3dbf8ee`. Every finding below was checked against the code (file:line references are to that commit). External facts (whisper.cpp, docker-py, pyannote.audio 4.x, SpeechBrain, sqlite-vec, yt-dlp extractors) were checked against their current sources where possible. Nothing was run on a GPU, so ROCm runtime behaviour is unverified and marked as such.
 
+**Status:** Phase 1 and the Phase 2 server are implemented on this branch (see the implementation notes at the end of each phase). Everything else is still to do.
+
 **Objectives, as I understand them:** download audio/video from YouTube, Twitch and French TV/radio/press, then transcribe → diarize → embed voices → identify speakers → analyse ("who said what", word counts). Everything is tracked in **one central SQLite database**, with GPU work done by **small, self-contained model servers** (one file per server, one client, one launcher, one script per feature).
 
 The plan keeps those two values. It adds no framework, ORM or orchestrator. The only shared code it proposes is a migration list in `helpers/database.py` and a few small helpers.
@@ -71,12 +73,24 @@ Effort: **S** < 1 h · **M** ≈ half a day to a day · **L** several days.
 | 1.8 | low | A trailing newline in `hf.token` (what `echo hf_x > hf.token` and most editors produce) breaks both the generated Dockerfile and the server script. | `helpers/pyannote_amd_server.py:13-14` | `f.read().strip()`. Phase 8.4 removes the token from the image entirely. |
 | 1.9 | medium | Failures are lost. `failed_urls` and `failed_transcriptions` are never printed. Every `assert_*` exits with status 0. **Ctrl+C during a download hangs forever**: the consumers block on `queue.get()` because the `None` sentinels are only queued after the loop. A dead Whisper container "fails" the whole queue in seconds while the healthy one is busy. | `sniff_and_transcript_channel_audios.py:28-92`, `helpers/*_client.py` | Wrap the producer loop in `try/finally`: drain the queue, then put one `None` per server. On a `ConnectionError`, re-queue the item and stop that consumer. Print the failures and `sys.exit(1)` if there were any. Optionally use `Queue(maxsize=2 * len(servers))`. |
 | 1.10 | medium | `add_ytdlp_content` uses `info["uploader"]`, `info["timestamp"]` and `info["duration"]`. France TV has no `uploader`. YouTube sets `timestamp=None` when the upload time is unknown. Live and upcoming items have `duration=None` (NOT NULL violation). A Twitch VOD of a stream still in progress has `is_live=True` and gets cached truncated. | `helpers/yt_dlp.py:25-36` | Use `.get()` with fallbacks: `uploader or channel or series`; `timestamp or release_timestamp`, falling back to `upload_date`. Skip `is_live` and `live_status in ("is_live", "is_upcoming", "post_live")`, and record the skip as a failure so it is visible. The schema side is in Phase 3.2. |
-| 1.11 | medium | Dedup is by exact URL, but the insert is `UNIQUE(platform, external_id)`. So `youtu.be/x` after `watch?v=x`, `&t=60`, or a franceinfo article embedding a france.tv video all raise `IntegrityError` on every run. | `helpers/yt_dlp.py:15`, `helpers/database.py:91-99` | After `extract_info`, look up by `(info["extractor_key"], info["id"])` and reuse that row. Store `info.get("webpage_url") or url`. |
+| 1.11 | medium | Dedup is by exact URL, but the insert is `UNIQUE(platform, external_id)`. So `youtu.be/x` after `watch?v=x`, `&t=60`, or a franceinfo article embedding a france.tv video all raise `IntegrityError` on every run. | `helpers/yt_dlp.py:15`, `helpers/database.py:91-99` | After `extract_info`, look up by `(info["extractor_key"], info["id"])` and reuse that row. Keep storing the URL as given: `webpage_url` can be an internal value (France TV gives `francetv:<id>#__youtubedl_smuggle=…`). |
 | 1.12 | low | `force=True` always crashes, because `add_content_file` is a plain `INSERT`. Cache hits trust DB rows even when the file was deleted. Only the whisper step checks `is_file()`. | `helpers/database.py:102-112`, `helpers/yt_dlp.py` | Make it an upsert: `ON CONFLICT(content_id, file_type) DO UPDATE SET path = excluded.path`. Add one `get_existing_file()` that also checks `is_file()`, and use it everywhere. |
 | 1.13 | low | `load_sparsified_transcription` **removes every newline** when there is nothing to remove: the empty alternation `"()\n"` matches every `\n` (reproduced). Duplicate timestamps remove too many markers. | `helpers/subtitles.py:76-110` | Return early when `number_to_remove <= 0`. Remove markers by index, not by value. |
 | 1.14 | low | Subtitles: `lang` and manual vs automatic are not part of the cache key. Platforms without srt (France TV serves vtt/ttml) are reported as "no subtitles" while a `.vtt` file sits unregistered. | `helpers/yt_dlp.py:91-127` | Add the `FFmpegSubtitlesConvertor` postprocessor (`format: srt`, `when: before_dl`). Put the language into the file key (see the `variant` column in 3.2). |
 | 1.15 | low | `whisper_result_to_srt` raises IndexError on a segment with no `words` and mishandles `t_dtw == -1`. | `helpers/whisper_client.py:122-132` | Guard both cases. |
 | 1.16 | low | The plot regexes `[^a-z]…[^a-z]` consume their separator. `" pipi pipi pipi "` counts 2, accented letters act as word boundaries (`trépied` counts as `pied`), and an empty date filter raises IndexError. | `plot_pipi_caca_panard.py:29-53,127` | Use lookarounds such as `(?<![^\W\d_])(pipis?\|pisser?)(?![^\W\d_])`. Phase 6 moves this script onto the DB. |
+
+**Implementation notes (done).**
+- The transcription script skips already-transcribed contents *before* any download, and only fetches the mp3 when the wav is missing. Deleting `cache/ytdlp_audio` (or the wavs) after a run therefore costs nothing.
+- Workers stop when downloads are over and nothing is pending (`Queue.unfinished_tasks`), so an item handed back by a dying server is still picked up.
+- Known trade-off of 1.9: a file that *crashes* whisper.cpp is handed to each server in turn and takes them all down. It's reported as "Not transcribed". Record such failures once the Phase 3 `failures` table exists.
+- 1.14 covers the language only: one subtitles file per content until the `variant` column of 3.2.
+- Also fixed:
+  - ffmpeg is killed on Ctrl+C instead of being left running;
+  - `noplaylist` is set, so a `watch?v=X&list=Y` URL is video X;
+  - a real playlist is rejected after one request;
+  - a busy Python server (single sync worker) is reported as busy rather than not ready;
+  - the plot counts *pété/pétés/pétée(s)* again.
 
 ---
 
@@ -114,102 +128,31 @@ POST /embed   multipart/form-data
 | Topic | Decision | Why |
 |---|---|---|
 | Model | `speechbrain/spkrec-ecapa-voxceleb` (ECAPA-TDNN, 192-d, 16 kHz, VoxCeleb1+2) | SpeechBrain's reference speaker model. Public and not gated, so **no HF token needed**. The server reads the dimension at startup, so swapping models needs no code change. |
-| SpeechBrain version | Pin a **1.1.x** release. After the first good build, pin the exact version. | 1.0.x is reported to break with torchaudio ≥ 2.9 (`list_audio_backends` removed, `load` moved to torchcodec). 1.1 renamed `use_auth_token` → `token`. |
-| Base image | The same pinned `rocm/pytorch@sha256:…` as pyannote (Phase 0.3) | Shared layers and one torch version. |
-| Protect ROCm torch | `pip freeze \| grep -iE '^(torch\|torchaudio)==' > /tmp/rocm.txt && pip install -c /tmp/rocm.txt …` | Without it, `pip install speechbrain` can replace the image's ROCm torch with a CUDA wheel from PyPI. With it, the build fails loudly instead. |
+| SpeechBrain version | Pinned to **1.1.2** (`speechbrain_version`) | 1.0.x is reported to break with torchaudio ≥ 2.9 (`list_audio_backends` removed, `load` moved to torchcodec). 1.1 renamed `use_auth_token` → `token`. 1.1.2 imports fine with torchaudio 2.11. |
+| Base image | The same pinned `rocm/pytorch@sha256:…` as pyannote (Phase 0.3) | Shared layers and one torch version. `rocm_pytorch_image` defaults to `rocm/pytorch:latest` like the other servers until it's pinned. |
+| Protect ROCm torch | `pip list --format=freeze \| grep -iE '^(torch\|torchaudio)==' > /tmp/rocm_constraints.txt && pip install -c /tmp/rocm_constraints.txt …` | Without it, `pip install speechbrain` can replace the image's ROCm torch with a CUDA wheel from PyPI. With it, the build fails loudly instead. `pip list --format=freeze` also handles torch installed from a local wheel, which `pip freeze` would print as `torch @ file://…`. |
 | Audio decoding | `soundfile` on the uploaded stream, `seek()` + `read()` per range. Require 16 kHz mono (reject anything else with 400). | **No torchcodec** (pyannote had to compile it from source). Memory stays bounded on a 6 h file, and nothing is kept on disk. |
 | Short turns | Shorter than `min_duration` (default 1.0 s, after clipping to the file length): return `null` | ECAPA's error rate rises sharply under ~3 s, so recognition should only *use* turns ≥ 3 s. A single batch of chunks shorter than ~40 ms crashes the conv padding, hence the `min_duration >= 0.1` validation. |
 | Long turns | Split into equal chunks ≤ `max_duration`; the turn embedding is the re-normalised mean of the L2-normalised chunk embeddings | Bounds GPU memory and padding. |
-| Batching | Sort chunks longest first, pad to the batch maximum, `wav_lens = len / max_len` | SpeechBrain masks the padding with relative lengths. Sorting keeps padding small, and an OOM shows up on the first batch. |
+| Batching | Sort chunks longest first, pad each chunk to the batch maximum **with its own audio** (`np.pad(..., mode="wrap")`), `wav_lens = len / max_len` | `wav_lens` only masks the statistics (normalisation, pooling); the convolutions still see the padding. With zero padding, a 1 s turn's vector depended on the other turns in its batch (cosine 0.977 alone vs. padded to 30 s, real ECAPA architecture). With wrap padding it's 0.9998. Sorting keeps padding small, and an OOM shows up on the first batch. |
 | Output | L2-normalised float32 vectors | Cosine similarity becomes a dot product, and `vec_distance_cosine` works directly in SQL. |
 | Limits | `app.config["MAX_FORM_MEMORY_SIZE"] = 64 MiB` | Werkzeug ≥ 3.1 caps non-file form fields at 500 kB, so a VOD with thousands of turns would get HTTP 413. |
 | Runtime | gunicorn `-w 1 --threads 1 --timeout 0`; `ENV HF_HUB_OFFLINE=1` after the build-time model download; `torch.cuda.empty_cache()` after each request | One request at a time on the GPU, no network at startup (reproducible), and peak memory is released for co-located Whisper and pyannote containers. |
 | Server code | A **plain raw string** (`SERVER_SCRIPT = r'''…'''`) configured by `ENV` in the Dockerfile, still base64-injected as today | No doubled braces. A unit test can `compile()` it before a 20-minute build (see 8.3). |
 
-### Server core (sketch)
+### Implementation (done)
 
-```python
-SERVER_SCRIPT = r'''
-import json, math, os
-import numpy as np
-import soundfile as sf
-import torch
-from flask import Flask, jsonify, request
-from speechbrain.inference.speaker import EncoderClassifier
+The server, its Dockerfile and its client are in `helpers/speechbrain_amd_server.py`, `helpers/speechbrain_client.py` and `run_speechbrain_servers.py`. On CPU, it was tested with the real ECAPA architecture (random weights, since the Hub isn't reachable from the test sandbox):
+- run through Flask's test client and through gunicorn with the exact ENTRYPOINT arguments;
+- the main case, clipping, short and long turns, padding consistency, all 400 cases (including NaN/Infinity), 20 000 segments, and a 25-minute request that isn't killed with `--timeout 0`.
 
-MODEL = os.environ["SB_MODEL"]
-SAMPLE_RATE = 16000
-app = Flask(__name__)
-app.config["MAX_FORM_MEMORY_SIZE"] = 64 * 1024 * 1024  # Werkzeug >= 3.1 default is 500 kB
-
-classifier = EncoderClassifier.from_hparams(
-    source=MODEL, savedir=os.environ["SB_SAVEDIR"], run_opts={"device": "cuda:0"}  # ROCm torch = "cuda"
-)
-classifier.eval()
-with torch.inference_mode():  # also warms up the kernels
-    DIMENSION = int(classifier.encode_batch(torch.zeros(1, SAMPLE_RATE)).shape[-1])
-
-
-def plan_chunks(segments, duration, min_duration, max_duration):
-    """[(segment index, start, end)]: too-short segments are dropped, long ones split evenly."""
-    chunks = []
-    for i, (start, end) in enumerate(segments):
-        end = min(end, duration)
-        if end - start < min_duration:
-            continue
-        n = math.ceil((end - start) / max_duration)
-        step = (end - start) / n
-        chunks += [(i, start + k * step, start + (k + 1) * step) for k in range(n)]
-    return chunks
-
-
-def embed_chunks(audio_file, chunks, batch_size):
-    chunks = sorted(chunks, key=lambda c: c[2] - c[1], reverse=True)
-    sums = {}
-    for b in range(0, len(chunks), batch_size):
-        batch = chunks[b : b + batch_size]
-        wavs = []
-        for _, start, end in batch:
-            audio_file.seek(int(start * SAMPLE_RATE))
-            wavs.append(audio_file.read(int((end - start) * SAMPLE_RATE), dtype="float32"))
-        max_len = max(len(w) for w in wavs)
-        padded = torch.zeros(len(wavs), max_len)
-        for j, w in enumerate(wavs):
-            padded[j, : len(w)] = torch.from_numpy(w)
-        lens = torch.tensor([len(w) / max_len for w in wavs])
-        with torch.inference_mode():
-            emb = classifier.encode_batch(padded, lens).squeeze(1)  # (B, 1, D) -> (B, D)
-        emb = torch.nn.functional.normalize(emb, dim=-1).cpu().numpy()
-        for (i, _, _), e in zip(batch, emb):
-            sums[i] = sums.get(i, 0) + e
-    return {i: s / np.linalg.norm(s) for i, s in sums.items()}
-
-# /health and /embed: validate params like the other servers (accepted_params + per-segment
-# checks), open sf.SoundFile(request.files["file"].stream) (400 on failure or if not 16 kHz mono),
-# plan_chunks -> embed_chunks (500 JSON on torch.cuda.OutOfMemoryError, empty_cache in finally),
-# then return embeddings in request order with None for missing indexes.
-'''
-```
-
-Dockerfile (sketch):
-
-```dockerfile
-FROM rocm/pytorch@sha256:<digest from Phase 0.3>
-RUN python3 -m pip freeze | grep -iE '^(torch|torchaudio)==' > /tmp/rocm.txt && cat /tmp/rocm.txt \
- && python3 -m pip install --no-cache-dir -c /tmp/rocm.txt flask gunicorn soundfile "speechbrain==1.1.*"
-ENV SB_MODEL=speechbrain/spkrec-ecapa-voxceleb SB_SAVEDIR=/models/ecapa PYTHONUNBUFFERED=1
-RUN python3 -c "import os; from speechbrain.inference.speaker import EncoderClassifier as E; E.from_hparams(source=os.environ['SB_MODEL'], savedir=os.environ['SB_SAVEDIR'])"
-ENV HF_HUB_OFFLINE=1
-RUN mkdir -p /app && echo <base64 SERVER_SCRIPT> | base64 -d > /app/speechbrain_server.py
-WORKDIR /app
-ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "0", "-b", "0.0.0.0:3000", "speechbrain_server:app"]
-```
+**Not tested:** the image build on `rocm/pytorch` and the GPU runtime. Use the manual test below.
 
 The build-time `from_hparams` runs on CPU. It downloads the model and also proves that `import speechbrain` works with the image's torchaudio, so an incompatibility fails at build time (once 1.4 is fixed). Don't mount a shared HF cache volume into this container: SpeechBrain's `savedir` entries are symlinks into `~/.cache/huggingface`.
 
 ### Pitfalls the server alone does not solve
 
-- **Send exclusive turns.** The pyannote server returns only `speaker_diarization`, which contains overlapping turns, so a range can contain two voices. Use `exclusive_speaker_diarization` instead (Phase 4.1). Even exclusive turns give overlapped frames to the dominant speaker, so store each turn's overlap and ignore heavily overlapped turns for recognition.
+- **Send exclusive turns.** `diarization` contains overlapping turns, so a range can contain two voices. Send the `exclusive_diarization` that the pyannote server now also returns (same `{speaker: [[start, end], …]}` shape) instead. Even exclusive turns give overlapped frames to the dominant speaker, so store each turn's overlap and ignore heavily overlapped turns for recognition.
 - **Long VODs.** A 6 h VOD has thousands of turns and a ~700 MB wav. One request per content (the wav is uploaded once) works with `--timeout 0`. The response is about 4 KB per turn; rounding to 6 decimals roughly halves that.
 - **pyannote already computes voiceprints.** `DiarizeOutput.speaker_embeddings` gives one centroid per label from pyannote's own embedding model (dimension unverified, likely 256). It's a free cross-check, but never mix those vectors with ECAPA ones.
 
@@ -394,7 +337,7 @@ If corpus-wide "find this voice" queries become slow, add a **rebuildable** `vec
 
 | # | Change |
 |---|---|
-| 4.1 | **Server** (`helpers/pyannote_amd_server.py`). Return `output.serialize()`; in pyannote.audio 4.x that gives `{"diarization": [...], "exclusive_diarization": [...]}` in chronological order. Also return `speaker_embeddings` (skip all-zero rows, read the dimension instead of assuming it). Keep `--timeout 0` (1.5) and the temp-file cleanup (1.7). Optionally pass pyannote an in-memory waveform read with `soundfile` from the 16 kHz wav; that could remove the torchcodec source build (lines 100-115) entirely (check against the pyannote 4 docs). |
+| 4.1 | **Server** (`helpers/pyannote_amd_server.py`). It already returns `exclusive_diarization` next to `diarization` (Phase 1, grouped by speaker). For the DB, consider `output.serialize()`, which in pyannote.audio 4.x gives both as chronological lists. Also return `speaker_embeddings` (skip all-zero rows, read the dimension instead of assuming it). Keep `--timeout 0` (1.5) and the temp-file cleanup (1.7). Optionally pass pyannote an in-memory waveform read with `soundfile` from the 16 kHz wav; that could remove the torchcodec source build (lines 100-115) entirely (check against the pyannote 4 docs). |
 | 4.2 | **Client.** `wav_to_pyannote_result(address, wav_path, params=None) -> dict`, with no forced speaker count. |
 | 4.3 | **`diarize_contents.py`** (new). Select contents with a `16k_mono_wav` and no `diarizations` row for (model, params). POST to the server, `write_atomic` the raw JSON as `pyannote_result`, then insert the `diarizations` row and all turns (regular + exclusive, with `overlap_ms`) **in one transaction**. Use the dispatch-to-many-servers loop from 1.9 if you run several pyannote servers. |
 | 4.4 | **Long VODs.** VBx clustering builds a condensed distance matrix over ~1 embedding per second per local speaker. Peak RAM is roughly `n² × 8` bytes: ~3 GB at n = 20 k (≈ 6 h), ~13 GB at n = 40 k. Measure with `docker stats` on your longest VOD. If needed, diarize ~2 h windows and relabel across windows using the per-window `speaker_embeddings`. |
