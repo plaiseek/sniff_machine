@@ -83,6 +83,8 @@ Python clients for these servers live in [helpers/](helpers/) (`whisper_client.p
 
 ## TODO
 
+See [PLAN.md](PLAN.md) for the full review and the phased improvement plan (bug fixes, DB migrations, SpeechBrain embedding server, speaker identification, new sources).
+
 1. Find a way to retrieve (or scrap) videos list of france.tv etc...
 2. Integrate the Pyannote diarization server into the sniffing pipeline
 3. Integrate the wtpsplit sentence segmentation into the sniffing pipeline
