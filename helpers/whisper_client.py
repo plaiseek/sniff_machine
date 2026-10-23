@@ -8,16 +8,16 @@ import sys
 
 def assert_whisper_servers(addresses: list):
     for address in addresses:
-        url = f"http://{address}/ready"
+        # whisper.cpp serves /health: {"status":"ok"}, or 503 while the model is loading
+        url = f"http://{address}/health"
         print(f"Checking {url}...")
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
-            if "<h1>Whisper.cpp Server</h1>" not in r.text:
-                raise Exception(f"Unexpected Whisper.cpp response: {r.text}")
-        except requests.exceptions.RequestException as e:
-            print(e)
-            sys.exit()
+            if r.json().get("status") != "ok":
+                raise ValueError(f"Unexpected Whisper.cpp response: {r.text}")
+        except (requests.exceptions.RequestException, ValueError) as e:
+            sys.exit(f"Whisper server {address} is not ready: {e}")
 
 
 supported_params = [
@@ -60,9 +60,9 @@ supported_params = [
 ]
 
 
-def mp3_to_whisper_result(
+def wav_to_whisper_result(
     whisper_address: str,
-    mp3_path: Path,
+    wav_path: Path,
     whisper_result_path: Path,
     language: str = "fr",
 ) -> None:
@@ -89,10 +89,12 @@ def mp3_to_whisper_result(
         if key not in supported_params:
             raise ValueError(f"{key} not supported !")
 
-    with open(mp3_path, "rb") as mp3_file:
-        files = {"file": (mp3_path.name, mp3_file, "audio/mpeg")}
+    with open(wav_path, "rb") as wav_file:
+        files = {"file": (wav_path.name, wav_file, "audio/wav")}
         whisper_url = f"http://{whisper_address}/inference"
-        response = requests.post(whisper_url, files=files, data=data)
+        response = requests.post(
+            whisper_url, files=files, data=data, timeout=(10, None)
+        )
 
     response.raise_for_status()
 
@@ -119,17 +121,18 @@ def whisper_result_to_srt(whisper_result_path: Path, srt_path: Path):
     os.makedirs(srt_path.parent, exist_ok=True)
     with open(srt_path, "w", encoding="utf-8") as f:
         # VAD removes parts of the audio and Whisper.cpp correct the segment start/end but not the word ones
-        words_with_dtw = [
-            (
-                segment["text"],
-                segment["words"][0]["t_dtw"]
-                + int(100 * (segment["start"] - segment["words"][0]["start"])),
-                segment["words"][-1]["t_dtw"]
-                + int(100 * (segment["end"] - segment["words"][-1]["end"])),
-            )
-            for segment in whisper_result["segments"]
-            if len(segment["text"]) > 0
-        ]
+        words_with_dtw = []
+        for segment in whisper_result["segments"]:
+            if len(segment["text"]) == 0:
+                continue
+            words = segment.get("words") or []
+            if len(words) > 0 and words[0]["t_dtw"] >= 0 and words[-1]["t_dtw"] >= 0:
+                dtw_start = words[0]["t_dtw"] + int(100 * (segment["start"] - words[0]["start"]))
+                dtw_end = words[-1]["t_dtw"] + int(100 * (segment["end"] - words[-1]["end"]))
+            else:
+                # No word or no DTW timestamp (t_dtw = -1): use the segment times
+                dtw_start, dtw_end = round(100 * segment["start"]), round(100 * segment["end"])
+            words_with_dtw.append((segment["text"], dtw_start, dtw_end))
 
         for i, word_with_dtw in enumerate(words_with_dtw, 1):
             word, word_dtw_start, word_dtw_end = word_with_dtw

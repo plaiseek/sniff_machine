@@ -70,8 +70,13 @@ def load_sparsified_transcription(txt_path: Path, max_number_timecodes: int) -> 
         if max_number_timecodes < 2:
             result = re.sub(r"\[\d{2}:\d{2}:\d{2}\]\n", "", text)
         else:
-            matches = re.findall(r"\[(\d{2}):(\d{2}):(\d{2})\]", text)
-            timestamps = [int(h) * 3600 + int(m) * 60 + int(s) for h, m, s in matches]
+            matches = list(re.finditer(r"\[(\d{2}):(\d{2}):(\d{2})\]\n?", text))
+            timestamps = [
+                int(h) * 3600 + int(m) * 60 + int(s)
+                for h, m, s in (match.groups() for match in matches)
+            ]
+            if len(timestamps) <= max_number_timecodes:
+                return text
 
             lookup_dict = {i: True for i in range(0, len(timestamps))}
             prev_dict = {i: i - 1 for i in range(1, len(timestamps))}
@@ -94,18 +99,15 @@ def load_sparsified_transcription(txt_path: Path, max_number_timecodes: int) -> 
                 prev_dict[next_dict[min_space_idx]] = prev_dict[min_space_idx]
                 next_dict[prev_dict[min_space_idx]] = next_dict[min_space_idx]
                 idx_to_remove.append(min_space_idx)
-            timestamps_to_remove = [timestamps[i] for i in idx_to_remove]
 
-            result = re.sub(
-                "({})\n".format(
-                    "|".join(
-                        [
-                            f"\\[{int(t / 3600):02}:{int((t % 3600)/60):02}:{t % 60:02}\\]"
-                            for t in timestamps_to_remove
-                        ]
-                    )
-                ),
-                "",
-                text,
-            )
+            # Remove the chosen markers by position: removing by value would also remove
+            # other occurrences of the same timestamp
+            pieces = []
+            last_end = 0
+            for i in sorted(idx_to_remove):
+                start, end = matches[i].span()
+                pieces.append(text[last_end:start])
+                last_end = end
+            pieces.append(text[last_end:])
+            result = "".join(pieces)
         return result

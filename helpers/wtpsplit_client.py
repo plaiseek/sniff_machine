@@ -4,14 +4,13 @@ import sys
 
 def assert_wtpsplit_servers(addresses: list):
     for address in addresses:
-        url = f"http://{address}/ready"
+        url = f"http://{address}/health"
         print(f"Checking {url}...")
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
         except requests.exceptions.RequestException as e:
-            print(e)
-            sys.exit()
+            sys.exit(f"Wtpsplit server {address} is not ready: {e}")
 
 
 def text_to_sentences(wtpsplit_address: str, text: str) -> list:

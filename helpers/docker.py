@@ -12,23 +12,21 @@ def build_image(image_tag: str, dockerfile: str) -> None:
         logs = client.api.build(
             fileobj=io.BytesIO(dockerfile.encode("utf-8")),
             tag=image_tag,
+            rm=True,
+            forcerm=True,
             decode=True,
         )
+        # The low-level API never raises BuildError: a failed step arrives as an {"error": ...} entry
         for entry in logs:
-            if "stream" in entry:
-                line = entry["stream"]
-                if line[-1] == "\n":
-                    line = line[:-1]
-                if len(line) == 0:
-                    continue
+            line = entry.get("stream", "").rstrip("\n")
+            if len(line) > 0:
                 print(line)
-    except docker.errors.BuildError as e:
-        if e.build_log:
-            for log_entry in e.build_log:
-                if "stream" in log_entry:
-                    print(log_entry["stream"])
-                elif "errorDetail" in log_entry:
-                    print(log_entry["errorDetail"]["message"])
+            if "error" in entry:
+                message = entry.get("errorDetail", {}).get("message") or entry["error"]
+                print(f"Failed to build {image_tag}: {message}")
+                sys.exit(os.EX_CONFIG)
+    except docker.errors.APIError as e:
+        print(f"Failed to build {image_tag}: {e}")
         sys.exit(os.EX_CONFIG)
 
 

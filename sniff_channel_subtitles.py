@@ -3,6 +3,7 @@ from helpers.yt_dlp import *
 from helpers.whisper_client import *
 from queue import Queue
 import helpers.database as db
+import sys
 
 video_urls = ls_channel_videos(
     "https://www.youtube.com/@SardocheLol/videos"
@@ -22,3 +23,4 @@ if len(failed_urls) > 0:
     print("Failed URLs:")
     for video_url, exception in failed_urls:
         print(f"  {video_url} : {exception}")
+    sys.exit(1)

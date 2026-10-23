@@ -7,32 +7,65 @@ from pathlib import Path
 import helpers.database as db
 
 
+def _upload_date(info: dict) -> str:
+    """ISO-8601 upload date from yt-dlp info, or '' when the extractor gives none."""
+    timestamp = info.get("timestamp") or info.get("release_timestamp")
+    if timestamp is not None:
+        return datetime.datetime.fromtimestamp(
+            timestamp, tz=datetime.timezone.utc
+        ).isoformat()
+    date = info.get("upload_date") or info.get("release_date")  # YYYYMMDD
+    if date:
+        return f"{date[:4]}-{date[4:6]}-{date[6:8]}"
+    return ""
+
+
 def add_ytdlp_content(
     db_conn: db.sqlite3.Connection,
     url: str,
     force: bool = False,
 ) -> db.Content:
     content = db.get_content_from_url(db_conn, url)
-    if content is not None:
-        info_path = db.get_content_file_path(db_conn, content.id, "ytdlp_info")
-        if info_path is not None and not force:
+    if content is not None and not force:
+        if db.get_existing_content_file(db_conn, content.id, "ytdlp_info") is not None:
             return content
 
     with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
         info = ydl.extract_info(url, download=False)
 
+        if info.get("_type") in ("playlist", "multi_video"):
+            raise ValueError(f"'{url}' is a playlist, not a single content")
+        # A live, upcoming or still recording content (e.g. the Twitch VOD of a running
+        # stream) would be cached truncated: it is picked up by a later run instead
+        if info.get("is_live") or info.get("live_status") in (
+            "is_live",
+            "is_upcoming",
+            "post_live",
+        ):
+            raise ValueError(
+                f"'{url}' is live or upcoming ({info.get('live_status')}), skipped"
+            )
+
         if content is None:
+            # The same content can be reached through several URLs (youtu.be/..., &t=..., embeds)
+            content = db.get_content_from_external_id(
+                db_conn, info["extractor_key"], info["id"]
+            )
+            if content is not None and not force:
+                if db.get_existing_content_file(db_conn, content.id, "ytdlp_info") is not None:
+                    return content
+
+        if content is None:
+            # Many extractors leave out uploader, timestamp or duration
             content = db.add_content(
                 db_conn,
                 info["extractor_key"],
                 info["id"],
                 url,
-                info["title"],
-                info["duration"],
-                info["uploader"],
-                datetime.datetime.fromtimestamp(
-                    info["timestamp"], tz=datetime.timezone.utc
-                ).isoformat(),
+                info.get("title") or "",
+                int(info.get("duration") or 0),
+                info.get("uploader") or info.get("channel") or info.get("series") or "",
+                _upload_date(info),
             )
 
         info_path = Path(
@@ -62,12 +95,11 @@ def get_ytdlp_content_mp3(
     if content is None:
         content = get_ytdlp_content(db_conn, url)
 
-    mp3_path = db.get_content_file_path(db_conn, content.id, "ytdlp_audio")
+    mp3_path = db.get_existing_content_file(db_conn, content.id, "ytdlp_audio")
     if mp3_path is not None and not force:
         return mp3_path
 
-    if mp3_path is None:
-        mp3_path = Path(f"cache/ytdlp_audio/{content.platform}_{content.external_id}.mp3")
+    mp3_path = Path(f"cache/ytdlp_audio/{content.platform}_{content.external_id}.mp3")
 
     with yt_dlp.YoutubeDL(
         {
@@ -84,8 +116,11 @@ def get_ytdlp_content_mp3(
         }
     ) as ydl:
         ydl.download([url])
-        db.add_content_file(db_conn, mp3_path, content.id, "ytdlp_audio")
-        return mp3_path
+
+    if not mp3_path.is_file():
+        raise ValueError(f"yt-dlp did not produce '{mp3_path}'")
+    db.add_content_file(db_conn, mp3_path, content.id, "ytdlp_audio")
+    return mp3_path
 
 
 def get_ytdlp_content_srt(
@@ -99,14 +134,14 @@ def get_ytdlp_content_srt(
     if content is None:
         content = get_ytdlp_content(db_conn, url)
 
-    srt_path = db.get_content_file_path(db_conn, content.id, "ytdlp_subtitles")
-    if srt_path is not None and not force:
+    # Only one subtitles file per content: the cached one is reused only if it is in `lang`
+    srt_path = Path(
+        f"cache/ytdlp_subtitles/{content.platform}_{content.external_id}.{lang}.srt"
+    )
+    cached_path = db.get_existing_content_file(db_conn, content.id, "ytdlp_subtitles")
+    if cached_path == srt_path and not force:
         return srt_path
 
-    if srt_path is None:
-        srt_path = Path(
-            f"cache/ytdlp_subtitles/{content.platform}_{content.external_id}.{lang}.srt"
-        )
     with yt_dlp.YoutubeDL(
         {
             "quiet": True,
@@ -115,6 +150,14 @@ def get_ytdlp_content_srt(
             "writeautomaticsub": automatic_sub,
             "subtitleslangs": [lang],
             "subtitlesformat": "srt",
+            # Platforms without srt subtitles (e.g. vtt/ttml only) are converted to srt
+            "postprocessors": [
+                {
+                    "key": "FFmpegSubtitlesConvertor",
+                    "format": "srt",
+                    "when": "before_dl",
+                }
+            ],
             "outtmpl": str(srt_path)[: -(5 + len(lang))],
         }
     ) as ydl:

@@ -49,10 +49,10 @@ def verify_params(params: dict) -> list:
             )
     return errors
 
-@app.route("/ready", methods=["GET"])
-def ready():
-    return {{}}
-    
+@app.route("/health", methods=["GET"])
+def health():
+    return {{"status": "ok", "model": "{sat_model}"}}
+
 @app.route("/split", methods=["POST"])
 def split():
     params = request.get_json() or {{}}
@@ -70,9 +70,11 @@ FROM rocm/pytorch:latest
 RUN pip install flask gunicorn wtpsplit
 RUN python -c "from wtpsplit import SaT; SaT('{sat_model}')"
 RUN mkdir -p /app && echo {base64_server_script} | base64 -d > /app/wtpsplit_server.py
+ENV PYTHONUNBUFFERED=1
 # ENTRYPOINT ["python", "/app/wtpsplit_server.py"]
 WORKDIR /app
-ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "120", "-b", "0.0.0.0:3000", "wtpsplit_server:app"]
+# --timeout 0: the sync worker would otherwise be killed while splitting a long transcript
+ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "0", "-b", "0.0.0.0:3000", "wtpsplit_server:app"]
 """
     dk.build_image("amd_wtpsplit:latest", dockerfile)
 

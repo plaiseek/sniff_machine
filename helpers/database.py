@@ -99,14 +99,26 @@ def get_content_from_url(
     return None
 
 
+def get_content_from_external_id(
+    db_conn: sqlite3.Connection, platform: str, external_id: str
+) -> Content | None:
+    for row in db_conn.execute(
+        """SELECT id, platform, external_id, url, title, duration_s, uploader, upload_date FROM contents WHERE platform = ? AND external_id = ?""",
+        (platform, external_id),
+    ):
+        return Content(*row)
+    return None
+
+
 def add_content_file(
     db_conn: sqlite3.Connection,
     path: pathlib.Path,
     content_id: int,
     file_type: str,
 ) -> None:
+    # REPLACE: re-registering a recomputed file (force=True, file deleted from disk) updates the row
     db_conn.execute(
-        "INSERT INTO files (path, content_id, file_type) VALUES (?, ?, ?)",
+        "INSERT OR REPLACE INTO files (path, content_id, file_type) VALUES (?, ?, ?)",
         (str(path), content_id, file_type),
     )
     db_conn.commit()
@@ -120,3 +132,14 @@ def get_content_file_path(
         (content_id, file_type),
     ):
         return pathlib.Path(row[0])
+    return None
+
+
+def get_existing_content_file(
+    db_conn: sqlite3.Connection, content_id: int, file_type: str
+) -> pathlib.Path | None:
+    """Registered path of a content file, or None if it is not registered or no longer on disk."""
+    path = get_content_file_path(db_conn, content_id, file_type)
+    if path is not None and path.is_file():
+        return path
+    return None

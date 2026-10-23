@@ -7,25 +7,30 @@ import sys
 
 def assert_pyannote_servers(addresses: list):
     for address in addresses:
-        url = f"http://{address}/ready"
+        url = f"http://{address}/health"
         print(f"Checking {url}...")
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
         except requests.exceptions.RequestException as e:
-            print(e)
-            sys.exit()
+            sys.exit(f"Pyannote server {address} is not ready: {e}")
 
 
-def mp3_to_pyannote_result(pyannote_address: str, mp3_path: Path) -> None:
-    params = {"num_speakers": 2}
-    with open(mp3_path, "rb") as mp3_file:
-        files = {"file": (mp3_path.name, mp3_file, "audio/mpeg")}
+def wav_to_pyannote_result(
+    pyannote_address: str, wav_path: Path, params: dict | None = None
+) -> dict:
+    """Diarize a 16 kHz mono wav. Returns {"diarization": {speaker: [[start, end], ...]},
+    "exclusive_diarization": {...}} (exclusive = at most one speaker at a time).
+    params: optional "num_speakers", "min_speakers", "max_speakers" (ints); by default
+    pyannote estimates the number of speakers."""
+    with open(wav_path, "rb") as wav_file:
+        files = {"file": (wav_path.name, wav_file, "audio/wav")}
         pyannote_url = f"http://{pyannote_address}/diarize"
         response = requests.post(
             pyannote_url,
             files=files,
-            data={"params": json.dumps(params)},
+            data={"params": json.dumps(params or {})},
+            timeout=(10, None),
         )
     try:
         response.raise_for_status()
@@ -33,4 +38,4 @@ def mp3_to_pyannote_result(pyannote_address: str, mp3_path: Path) -> None:
         raise requests.exceptions.HTTPError(
             f"{e}\nServer said: {response.text}", response=response
         ) from None
-    return response.json()["diarization"]
+    return response.json()

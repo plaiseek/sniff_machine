@@ -11,7 +11,8 @@ def build_pyannote_image(
     huggingface_token_path: Path, model: str = "pyannote/speaker-diarization-community-1"
 ) -> None:
     with open(huggingface_token_path, "r") as f:
-        huggingface_token = f.read()
+        # A trailing newline would break both the Dockerfile and the server script
+        huggingface_token = f.read().strip()
 
     server_script = f"""import torch
 from pyannote.audio import Pipeline
@@ -20,13 +21,12 @@ from pyannote.audio.pipelines.utils.hook import ProgressHook
 from flask import Flask, request, jsonify
 from pathlib import Path
 from werkzeug.utils import secure_filename
+import tempfile
 import time
 from collections import defaultdict
 import json
 
 app = Flask(__name__)
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
 
 pipeline = Pipeline.from_pretrained("{model}",token="{huggingface_token}")
 pipeline.to(torch.device("cuda"))
@@ -61,9 +61,9 @@ class LineProgressHook:
             self.last[name] = time.monotonic()
             print(f"{{name}}: {{completed}}/{{total}}", flush=True)
 
-@app.route("/ready", methods=["GET"])
-def ready():
-    return {{}}
+@app.route("/health", methods=["GET"])
+def health():
+    return {{"status": "ok", "model": "{model}"}}
 
 @app.route("/diarize", methods=["POST"])
 def diarize():
@@ -78,18 +78,24 @@ def diarize():
         print(errors, flush=True)
         return jsonify({{"error": ", ".join(errors)}}), 400
 
-    save_path = UPLOAD_DIR / secure_filename(audio.filename)
-    audio.save(save_path)
-    try:
-        output = pipeline(save_path, hook=LineProgressHook(), **params)
-    except Exception as e:
-        print(e)
-        return jsonify({{"error": str(e)}}), 400
+    # Uploads go to a temporary directory deleted after each request (the filename keeps its extension)
+    with tempfile.TemporaryDirectory() as upload_dir:
+        save_path = Path(upload_dir) / (secure_filename(audio.filename) or "audio")
+        audio.save(save_path)
+        try:
+            output = pipeline(save_path, hook=LineProgressHook(), **params)
+        except Exception as e:
+            print(e)
+            return jsonify({{"error": str(e)}}), 400
 
     diarization = defaultdict(list)
     for turn, speaker in output.speaker_diarization:
-        diarization[speaker].append([turn.start, turn.end])        
-    return jsonify({{"diarization": diarization}})
+        diarization[speaker].append([turn.start, turn.end])
+    # At most one speaker at a time: the turns to send to the SpeechBrain server
+    exclusive_diarization = defaultdict(list)
+    for turn, speaker in output.exclusive_speaker_diarization:
+        exclusive_diarization[speaker].append([turn.start, turn.end])
+    return jsonify({{"diarization": diarization, "exclusive_diarization": exclusive_diarization}})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
@@ -115,9 +121,11 @@ RUN pip install pybind11 setuptools wheel cmake ninja && \
     rm -rf /tmp/torchcodec
 RUN python -c "from pyannote.audio import Pipeline; Pipeline.from_pretrained('{model}',token='{huggingface_token}')"
 RUN mkdir -p /app && echo {base64_server_script} | base64 -d > /app/pyannote_server.py
+ENV PYTHONUNBUFFERED=1
 # ENTRYPOINT ["python", "/app/pyannote_server.py"]
 WORKDIR /app
-ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "120", "-b", "0.0.0.0:3000", "pyannote_server:app"]
+# --timeout 0: the sync worker would otherwise be killed while diarizing a long audio file
+ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "0", "-b", "0.0.0.0:3000", "pyannote_server:app"]
 """
     dk.build_image("amd_pyannote:latest", dockerfile)
 

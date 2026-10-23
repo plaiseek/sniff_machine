@@ -1,5 +1,6 @@
 from helpers.subtitles import *
 from helpers.yt_dlp import *
+import json
 import os
 
 workdir = "old_cache/medoliie"
@@ -24,29 +25,35 @@ from datetime import datetime
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
+def word_regexp(pattern: str) -> re.Pattern:
+    """Whole words only: lookarounds don't consume the neighbouring characters (so repeated words
+    and words at the start/end of the text count), and accented letters are letters."""
+    return re.compile(f"(?<![^\\W\\d_])({pattern})(?![^\\W\\d_])", re.IGNORECASE)
+
+
 themes = {
     "pipi/pisser": {
-        "regexp": re.compile("[^a-z](pipis?|pisser?)[^a-z]", re.IGNORECASE),
+        "regexp": word_regexp("pipis?|pisser?"),
         "color": "#FF6B6B",
         "marker": "o",
     },
     "caca/chier": {
-        "regexp": re.compile("[^a-z](cacas?|chier?)[^a-z]", re.IGNORECASE),
+        "regexp": word_regexp("cacas?|chier?"),
         "color": "#CF7226",
         "marker": "v",
     },
     "panard/pied": {
-        "regexp": re.compile("[^a-z](pieds?|panards?)[^a-z]", re.IGNORECASE),
+        "regexp": word_regexp("pieds?|panards?"),
         "color": "#51CF66",
         "marker": "^",
     },
     "prout/pet/péter": {
-        "regexp": re.compile("[^a-z](pets?|prout(s|er|es|e|ons|ent)?|p(é|è)t(er|e|es|ons|ent)?)[^a-z]", re.IGNORECASE),
+        "regexp": word_regexp("pets?|prout(s|er|es|e|ons|ent)?|p(é|è)t(er|e|es|ons|ent)?"),
         "color": "#4D96FF",
         "marker": "s",
     },
     "OST": {
-        "regexp": re.compile("[^a-z]OST[^a-z]", re.IGNORECASE),
+        "regexp": word_regexp("OST"),
         "color": "#C551CF",
         "marker": "d",
     },
@@ -63,7 +70,7 @@ def build_series(data):
     counts_dict = defaultdict(list)
 
     for video_info, transcription in data:
-        if video_info["upload_date"] < "202604":
+        if not video_info.get("timestamp") or video_info.get("upload_date", "") < "202604":
             continue
 
         timestamps.append(video_info["timestamp"])
@@ -88,6 +95,9 @@ def build_series(data):
 
 def plot_word_counts(data):
     dates_sorted, counts_sorted = build_series(data)
+    if len(dates_sorted) == 0:
+        print("No video to plot.")
+        return
 
     plt.rcParams.update(
         {
