@@ -22,8 +22,17 @@ Each model runs as an HTTP server inside a Docker container built and managed by
 | Whisper | [run_whisper_servers.py](run_whisper_servers.py) | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `large-v3` + Silero VAD, HIP build | 8070, 8071 |
 | Pyannote | [run_pyannote_servers.py](run_pyannote_servers.py) | `pyannote/speaker-diarization-community-1` | 8050 |
 | wtpsplit | [run_wtpsplit_servers.py](run_wtpsplit_servers.py) | SaT `sat-12l-sm` (sentence segmentation) | 8060 |
+| SpeechBrain | [run_speechbrain_servers.py](run_speechbrain_servers.py) | `speechbrain/spkrec-ecapa-voxceleb` (ECAPA-TDNN, 192-dim voice embeddings) | 8040 |
 
-Python clients for these servers live in [helpers/](helpers/) (`whisper_client.py`, `pyannote_client.py`, `wtpsplit_client.py`). All servers expose a `/ready` endpoint; inference endpoints are `/inference` (Whisper), `/diarize` (Pyannote) and `/split` (wtpsplit).
+Python clients for these servers live in [helpers/](helpers/) (`whisper_client.py`, `pyannote_client.py`, `wtpsplit_client.py`, `speechbrain_client.py`). All servers expose a `/health` endpoint; inference endpoints are `/inference` (Whisper), `/diarize` (Pyannote), `/split` (wtpsplit) and `/embed` (SpeechBrain).
+
+The Pyannote server returns both the regular diarization (with overlapping speech) and the exclusive one (at most one speaker at a time). The SpeechBrain server takes a 16 kHz mono wav and a list of `[start, end]` ranges (e.g. the exclusive diarization turns) and returns one L2-normalised embedding per range, or `null` when the range is too short (`min_duration`, 1 s by default). Ranges longer than `max_duration` (30 s by default) are embedded in chunks whose embeddings are averaged:
+
+```bash
+curl -F file=@cache/16k_mono_wav/<content>.wav \
+     -F 'params={"segments": [[0.0, 5.0], [12.3, 15.9]]}' \
+     http://127.0.0.1:8040/embed
+```
 
 ## Installation
 
@@ -60,6 +69,7 @@ Python clients for these servers live in [helpers/](helpers/) (`whisper_client.p
    python run_whisper_servers.py    # transcription
    python run_pyannote_servers.py   # speaker diarization
    python run_wtpsplit_servers.py   # sentence segmentation
+   python run_speechbrain_servers.py # voice embeddings
    ```
    Each script builds the Docker image if needed, starts the containers, and streams their logs until you hit Ctrl+C.
 
@@ -69,7 +79,7 @@ Python clients for these servers live in [helpers/](helpers/) (`whisper_client.p
      ```bash
      python sniff_and_transcript_channel_audios.py
      ```
-     For each video of the channel it downloads the audio (mp3), converts it to 16 kHz mono wav, and dispatches transcription jobs to all the Whisper servers in parallel. Results are saved as JSON in `cache/whisper_result/` and registered in the database.
+     For each video of the channel it downloads the audio (mp3), converts it to 16 kHz mono wav, and dispatches the wav transcription jobs to all the Whisper servers in parallel. Results are saved as JSON in `cache/whisper_result/` and registered in the database. Failures are listed at the end of the run (exit code 1).
 
    - **Download a channel's existing subtitles** — edit [sniff_channel_subtitles.py](sniff_channel_subtitles.py) to set the target channel URL(s), then:
      ```bash
@@ -88,7 +98,7 @@ See [PLAN.md](PLAN.md) for the full review and the phased improvement plan (bug 
 1. Find a way to retrieve (or scrap) videos list of france.tv etc...
 2. Integrate the Pyannote diarization server into the sniffing pipeline
 3. Integrate the wtpsplit sentence segmentation into the sniffing pipeline
-4. Implement a SpeechBrain pipeline for speaker recognition
+4. Integrate the SpeechBrain embedding server into the pipeline: store turn embeddings in the database and identify speakers
 
 ### Potential medias
 
