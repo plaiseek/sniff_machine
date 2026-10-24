@@ -67,11 +67,14 @@ if __name__ == "__main__":
     base64_server_script = base64.b64encode(server_script.encode()).decode()
     dockerfile = f"""
 FROM rocm/pytorch:latest
-RUN pip install flask gunicorn wtpsplit
-RUN python -c "from wtpsplit import SaT; SaT('{sat_model}')"
+# Constrain pip to the ROCm torch of the base image: it fails loudly instead of replacing it with a CUDA wheel
+RUN python3 -m pip list --format=freeze | grep -iE '^(torch|torchaudio)==' > /tmp/rocm_constraints.txt && \\
+    cat /tmp/rocm_constraints.txt && \\
+    python3 -m pip install --no-cache-dir -c /tmp/rocm_constraints.txt flask gunicorn wtpsplit
+RUN python3 -c "from wtpsplit import SaT; SaT('{sat_model}')"
 RUN mkdir -p /app && echo {base64_server_script} | base64 -d > /app/wtpsplit_server.py
 ENV PYTHONUNBUFFERED=1
-# ENTRYPOINT ["python", "/app/wtpsplit_server.py"]
+# ENTRYPOINT ["python3", "/app/wtpsplit_server.py"]
 WORKDIR /app
 # --timeout 0: the sync worker would otherwise be killed while splitting a long transcript
 ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "0", "-b", "0.0.0.0:3000", "wtpsplit_server:app"]

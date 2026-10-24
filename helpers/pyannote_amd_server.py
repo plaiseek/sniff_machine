@@ -2,9 +2,8 @@ import helpers.docker as dk
 import base64
 from pathlib import Path
 
-# torchcodec_version has to match the Pytorch version used in rocm/pytorch:latest
-# https://github.com/meta-pytorch/torchcodec#compatibility-with-torch-versions
-torchcodec_version = "v0.10.0"
+# The server relies on the DiarizeOutput of pyannote.audio 4.x (exclusive_speaker_diarization)
+pyannote_version = "4.0.7"
 
 
 def build_pyannote_image(
@@ -19,9 +18,7 @@ from pyannote.audio import Pipeline
 from pyannote.audio.pipelines.utils.hook import ProgressHook
 # import torchaudio
 from flask import Flask, request, jsonify
-from pathlib import Path
-from werkzeug.utils import secure_filename
-import tempfile
+import soundfile as sf
 import time
 from collections import defaultdict
 import json
@@ -78,15 +75,20 @@ def diarize():
         print(errors, flush=True)
         return jsonify({{"error": ", ".join(errors)}}), 400
 
-    # Uploads go to a temporary directory deleted after each request (the filename keeps its extension)
-    with tempfile.TemporaryDirectory() as upload_dir:
-        save_path = Path(upload_dir) / (secure_filename(audio.filename) or "audio")
-        audio.save(save_path)
-        try:
-            output = pipeline(save_path, hook=LineProgressHook(), **params)
-        except Exception as e:
-            print(e)
-            return jsonify({{"error": str(e)}}), 400
+    # Decoded with soundfile and given to pyannote in memory: torchcodec is not needed
+    # (Werkzeug spools big uploads to a temporary file it deletes itself)
+    try:
+        samples, sample_rate = sf.read(audio.stream, dtype="float32", always_2d=True)
+    except Exception as e:
+        return jsonify({{"error": f"Cannot decode audio: {{e}}"}}), 400
+    waveform = torch.from_numpy(samples.T)  # (channel, time)
+    try:
+        output = pipeline(
+            {{"waveform": waveform, "sample_rate": sample_rate}}, hook=LineProgressHook(), **params
+        )
+    except Exception as e:
+        print(e)
+        return jsonify({{"error": str(e)}}), 400
 
     diarization = defaultdict(list)
     for turn, speaker in output.speaker_diarization:
@@ -103,26 +105,21 @@ if __name__ == "__main__":
     base64_server_script = base64.b64encode(server_script.encode()).decode()
     dockerfile = f"""
 FROM rocm/pytorch:latest
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg pkg-config \
-    libavcodec-dev libavformat-dev libavutil-dev \
-    libswscale-dev libavdevice-dev libavfilter-dev libswresample-dev \
-    && rm -rf /var/lib/apt/lists/*
-RUN pip install --upgrade pip && pip install flask gunicorn pyannote.audio && \
-    pip uninstall -y torchcodec
-RUN pip install pybind11 setuptools wheel cmake ninja && \
-    git -c advice.detachedHead=false clone --depth 1 --branch {torchcodec_version} https://github.com/pytorch/torchcodec.git /tmp/torchcodec && \
-    cd /tmp/torchcodec && \
-    export pybind11_DIR=$(python3 -c "import pybind11; print(pybind11.get_cmake_dir())") && \
-    export CMAKE_PREFIX_PATH="${{pybind11_DIR}}:${{CMAKE_PREFIX_PATH}}" && \
-    export TORCHCODEC_DISABLE_COMPILE_WARNING_AS_ERROR=1 && \
-    export I_CONFIRM_THIS_IS_NOT_A_LICENSE_VIOLATION=1 && \
-    pip install . --no-build-isolation && \
-    rm -rf /tmp/torchcodec
-RUN python -c "from pyannote.audio import Pipeline; Pipeline.from_pretrained('{model}',token='{huggingface_token}')"
+# pyannote.audio 4 sends usage metrics (audio durations, speaker counts) to otel.pyannote.ai by default
+ENV PYANNOTE_METRICS_ENABLED=0
+# Constrain pip to the ROCm torch/torchaudio of the base image: it fails loudly instead of replacing them with CUDA wheels.
+# pip itself is not upgraded: in the Ubuntu 24.04 based images it belongs to Debian and cannot be uninstalled.
+# torchcodec (pulled by pyannote.audio, and tied to one torch version) is removed: the server decodes the audio itself,
+# so the "torchcodec is not installed correctly" warning at startup is expected.
+RUN python3 -m pip list --format=freeze | grep -iE '^(torch|torchaudio)==' > /tmp/rocm_constraints.txt && \\
+    cat /tmp/rocm_constraints.txt && \\
+    python3 -m pip install --no-cache-dir -c /tmp/rocm_constraints.txt \\
+    flask gunicorn soundfile pyannote.audio=={pyannote_version} && \\
+    python3 -m pip uninstall -y torchcodec
+RUN python3 -c "from pyannote.audio import Pipeline; Pipeline.from_pretrained('{model}',token='{huggingface_token}')"
 RUN mkdir -p /app && echo {base64_server_script} | base64 -d > /app/pyannote_server.py
 ENV PYTHONUNBUFFERED=1
-# ENTRYPOINT ["python", "/app/pyannote_server.py"]
+# ENTRYPOINT ["python3", "/app/pyannote_server.py"]
 WORKDIR /app
 # --timeout 0: the sync worker would otherwise be killed while diarizing a long audio file
 ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "0", "-b", "0.0.0.0:3000", "pyannote_server:app"]

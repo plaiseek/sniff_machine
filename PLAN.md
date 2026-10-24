@@ -81,6 +81,11 @@ Effort: **S** < 1 h · **M** ≈ half a day to a day · **L** several days.
 | 1.16 | low | The plot regexes `[^a-z]…[^a-z]` consume their separator. `" pipi pipi pipi "` counts 2, accented letters act as word boundaries (`trépied` counts as `pied`), and an empty date filter raises IndexError. | `plot_pipi_caca_panard.py:29-53,127` | Use lookarounds such as `(?<![^\W\d_])(pipis?\|pisser?)(?![^\W\d_])`. Phase 6 moves this script onto the DB. |
 
 **Implementation notes (done).**
+- **`rocm/pytorch:latest` moved** (the 0.3 risk materialised): the new image is Ubuntu 24.04 with Debian's Python, so it has no `python` command and pip can't upgrade itself, and its torch no longer matches torchcodec v0.10.0. Changes:
+  - all Dockerfiles use `python3` and never upgrade pip;
+  - pip is constrained to the base image's torch/torchaudio;
+  - the pyannote server decodes the upload with `soundfile` and passes pyannote an in-memory waveform (pyannote.audio 4 supports this without torchcodec), which removes the torchcodec source build and its ffmpeg/libav layer;
+  - pyannote.audio is pinned to 4.0.7, and its default telemetry to otel.pyannote.ai is turned off (`PYANNOTE_METRICS_ENABLED=0`).
 - The transcription script skips already-transcribed contents *before* any download, and only fetches the mp3 when the wav is missing. Deleting `cache/ytdlp_audio` (or the wavs) after a run therefore costs nothing.
 - Workers stop when downloads are over and nothing is pending (`Queue.unfinished_tasks`), so an item handed back by a dying server is still picked up.
 - Known trade-off of 1.9: a file that *crashes* whisper.cpp is handed to each server in turn and takes them all down. It's reported as "Not transcribed". Record such failures once the Phase 3 `failures` table exists.
@@ -337,7 +342,7 @@ If corpus-wide "find this voice" queries become slow, add a **rebuildable** `vec
 
 | # | Change |
 |---|---|
-| 4.1 | **Server** (`helpers/pyannote_amd_server.py`). It already returns `exclusive_diarization` next to `diarization` (Phase 1, grouped by speaker). For the DB, consider `output.serialize()`, which in pyannote.audio 4.x gives both as chronological lists. Also return `speaker_embeddings` (skip all-zero rows, read the dimension instead of assuming it). Keep `--timeout 0` (1.5) and the temp-file cleanup (1.7). Optionally pass pyannote an in-memory waveform read with `soundfile` from the 16 kHz wav; that could remove the torchcodec source build (lines 100-115) entirely (check against the pyannote 4 docs). |
+| 4.1 | **Server** (`helpers/pyannote_amd_server.py`). It already returns `exclusive_diarization` next to `diarization` (Phase 1, grouped by speaker). For the DB, consider `output.serialize()`, which in pyannote.audio 4.x gives both as chronological lists. Also return `speaker_embeddings` (skip all-zero rows, read the dimension instead of assuming it). Keep `--timeout 0` (1.5). (Done: the server passes pyannote an in-memory waveform read with `soundfile`, so the torchcodec source build is gone.) |
 | 4.2 | **Client.** `wav_to_pyannote_result(address, wav_path, params=None) -> dict`, with no forced speaker count. |
 | 4.3 | **`diarize_contents.py`** (new). Select contents with a `16k_mono_wav` and no `diarizations` row for (model, params). POST to the server, `write_atomic` the raw JSON as `pyannote_result`, then insert the `diarizations` row and all turns (regular + exclusive, with `overlap_ms`) **in one transaction**. Use the dispatch-to-many-servers loop from 1.9 if you run several pyannote servers. |
 | 4.4 | **Long VODs.** VBx clustering builds a condensed distance matrix over ~1 embedding per second per local speaker. Peak RAM is roughly `n² × 8` bytes: ~3 GB at n = 20 k (≈ 6 h), ~13 GB at n = 40 k. Measure with `docker stats` on your longest VOD. If needed, diarize ~2 h windows and relabel across windows using the per-window `speaker_embeddings`. |
