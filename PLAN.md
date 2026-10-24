@@ -86,6 +86,12 @@ Effort: **S** < 1 h · **M** ≈ half a day to a day · **L** several days.
   - pip is constrained to the base image's torch/torchaudio;
   - the pyannote server decodes the upload with `soundfile` and passes pyannote an in-memory waveform (pyannote.audio 4 supports this without torchcodec), which removes the torchcodec source build and its ffmpeg/libav layer;
   - pyannote.audio is pinned to 4.0.7, and its default telemetry to otel.pyannote.ai is turned off (`PYANNOTE_METRICS_ENABLED=0`).
+  - The HF token is out of the pyannote image (part of 8.4), via a multi-stage build:
+    - `hf.token` is sent in the build context (`build_image(..., files=...)`) to a throwaway `download` stage, which downloads the model;
+    - the build fails if the token turns up in the downloaded cache;
+    - the final image only gets `HF_HOME/hub` and loads it with `HF_HUB_OFFLINE=1`, so containers need no token and no network.
+    - The `download` stage's cached layers (which hold the token) stay in the local build cache: `docker builder prune` removes them.
+  - The "pip as root" and pyannote's torchcodec warnings are silenced (`PIP_ROOT_USER_ACTION=ignore`, and a `PYTHONWARNINGS` filter on `pyannote.audio.core.io` only).
 - The transcription script skips already-transcribed contents *before* any download, and only fetches the mp3 when the wav is missing. Deleting `cache/ytdlp_audio` (or the wavs) after a run therefore costs nothing.
 - Workers stop when downloads are over and nothing is pending (`Queue.unfinished_tasks`), so an item handed back by a dying server is still picked up.
 - Known trade-off of 1.9: a file that *crashes* whisper.cpp is handed to each server in turn and takes them all down. It's reported as "Not transcribed". Record such failures once the Phase 3 `failures` table exists.

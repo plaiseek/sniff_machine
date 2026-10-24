@@ -2,15 +2,31 @@ import docker
 import io
 import os
 import sys
+import tarfile
 import threading
 
 
-def build_image(image_tag: str, dockerfile: str) -> None:
+def build_image(image_tag: str, dockerfile: str, files: dict | None = None) -> None:
+    """files: {name: content} added to the build context, so that the Dockerfile can COPY them
+    (their content is never printed)."""
     print(f"Building {image_tag} Docker image...")
+    if files is None:
+        context = {"fileobj": io.BytesIO(dockerfile.encode("utf-8"))}
+    else:
+        tar_bytes = io.BytesIO()
+        with tarfile.open(fileobj=tar_bytes, mode="w") as tar:
+            for name, content in {"Dockerfile": dockerfile, **files}.items():
+                data = content.encode("utf-8")
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                info.mode = 0o600
+                tar.addfile(info, io.BytesIO(data))
+        tar_bytes.seek(0)
+        context = {"fileobj": tar_bytes, "custom_context": True}
     client = docker.from_env()
     try:
         logs = client.api.build(
-            fileobj=io.BytesIO(dockerfile.encode("utf-8")),
+            **context,
             tag=image_tag,
             rm=True,
             forcerm=True,

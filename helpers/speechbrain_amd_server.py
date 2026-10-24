@@ -201,6 +201,8 @@ def build_speechbrain_image(
     dockerfile = f"""
 FROM {base_image}
 ENV PYTHONUNBUFFERED=1 SPEECHBRAIN_MODEL={model} SPEECHBRAIN_SAVEDIR={savedir}
+# Running pip as root is expected in this single-purpose image
+ENV PIP_ROOT_USER_ACTION=ignore
 # Constrain pip to the ROCm torch/torchaudio of the base image: it fails loudly instead of replacing them with CUDA wheels
 RUN python3 -m pip list --format=freeze | grep -iE '^(torch|torchaudio)==' > /tmp/rocm_constraints.txt && \\
     cat /tmp/rocm_constraints.txt && \\

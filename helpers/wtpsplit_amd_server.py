@@ -67,6 +67,8 @@ if __name__ == "__main__":
     base64_server_script = base64.b64encode(server_script.encode()).decode()
     dockerfile = f"""
 FROM rocm/pytorch:latest
+# Running pip as root is expected in this single-purpose image
+ENV PIP_ROOT_USER_ACTION=ignore
 # Constrain pip to the ROCm torch of the base image: it fails loudly instead of replacing it with a CUDA wheel
 RUN python3 -m pip list --format=freeze | grep -iE '^(torch|torchaudio)==' > /tmp/rocm_constraints.txt && \\
     cat /tmp/rocm_constraints.txt && \\

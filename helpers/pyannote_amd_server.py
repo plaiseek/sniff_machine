@@ -10,7 +10,6 @@ def build_pyannote_image(
     huggingface_token_path: Path, model: str = "pyannote/speaker-diarization-community-1"
 ) -> None:
     with open(huggingface_token_path, "r") as f:
-        # A trailing newline would break both the Dockerfile and the server script
         huggingface_token = f.read().strip()
 
     server_script = f"""import torch
@@ -25,7 +24,8 @@ import json
 
 app = Flask(__name__)
 
-pipeline = Pipeline.from_pretrained("{model}",token="{huggingface_token}")
+# Loaded from the copy in the image (HF_HUB_OFFLINE): no token needed
+pipeline = Pipeline.from_pretrained("{model}")
 pipeline.to(torch.device("cuda"))
 
 accepted_params = {{
@@ -104,19 +104,34 @@ if __name__ == "__main__":
 """
     base64_server_script = base64.b64encode(server_script.encode()).decode()
     dockerfile = f"""
-FROM rocm/pytorch:latest
+FROM rocm/pytorch:latest AS base
 # pyannote.audio 4 sends usage metrics (audio durations, speaker counts) to otel.pyannote.ai by default
 ENV PYANNOTE_METRICS_ENABLED=0
+# Running pip as root is expected in this single-purpose image
+ENV PIP_ROOT_USER_ACTION=ignore
+# torchcodec (pulled by pyannote.audio, and tied to one torch version) is removed: the server decodes the audio
+# itself, so pyannote's "torchcodec is not installed correctly" warning (its only one in that module) is silenced
+ENV PYTHONWARNINGS=ignore::UserWarning:pyannote.audio.core.io
+ENV HF_HOME=/opt/huggingface
 # Constrain pip to the ROCm torch/torchaudio of the base image: it fails loudly instead of replacing them with CUDA wheels.
 # pip itself is not upgraded: in the Ubuntu 24.04 based images it belongs to Debian and cannot be uninstalled.
-# torchcodec (pulled by pyannote.audio, and tied to one torch version) is removed: the server decodes the audio itself,
-# so the "torchcodec is not installed correctly" warning at startup is expected.
 RUN python3 -m pip list --format=freeze | grep -iE '^(torch|torchaudio)==' > /tmp/rocm_constraints.txt && \\
     cat /tmp/rocm_constraints.txt && \\
     python3 -m pip install --no-cache-dir -c /tmp/rocm_constraints.txt \\
     flask gunicorn soundfile pyannote.audio=={pyannote_version} && \\
     python3 -m pip uninstall -y torchcodec
-RUN python3 -c "from pyannote.audio import Pipeline; Pipeline.from_pretrained('{model}',token='{huggingface_token}')"
+
+# Throwaway stage, the only one that sees the Hugging Face token: it downloads the (gated) model.
+# The build log only shows the commands below, never the token itself.
+FROM base AS download
+COPY hf.token /tmp/hf.token
+RUN HF_TOKEN_PATH=/tmp/hf.token python3 -c "from pyannote.audio import Pipeline; Pipeline.from_pretrained('{model}')" && \\
+    ! grep -rqsF "$(cat /tmp/hf.token)" "$HF_HOME"
+
+# Final image: the downloaded model without the token (checked by the grep above), loaded offline at runtime
+FROM base
+COPY --from=download /opt/huggingface/hub /opt/huggingface/hub
+ENV HF_HUB_OFFLINE=1
 RUN mkdir -p /app && echo {base64_server_script} | base64 -d > /app/pyannote_server.py
 ENV PYTHONUNBUFFERED=1
 # ENTRYPOINT ["python3", "/app/pyannote_server.py"]
@@ -124,7 +139,7 @@ WORKDIR /app
 # --timeout 0: the sync worker would otherwise be killed while diarizing a long audio file
 ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "0", "-b", "0.0.0.0:3000", "pyannote_server:app"]
 """
-    dk.build_image("amd_pyannote:latest", dockerfile)
+    dk.build_image("amd_pyannote:latest", dockerfile, files={"hf.token": huggingface_token})
 
 
 def run_pyannote_container(port: int, rocm_device: int = 0):
