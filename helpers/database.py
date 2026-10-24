@@ -110,6 +110,25 @@ def get_content_from_external_id(
     return None
 
 
+def get_contents_without_file(
+    db_conn: sqlite3.Connection, file_type: str, source_file_types: list[str]
+) -> list[Content]:
+    """Contents with a file of one of `source_file_types` registered, but no `file_type` one.
+
+    Only the registrations are checked, not whether the files are still on disk."""
+    placeholders = ", ".join("?" for _ in source_file_types)
+    return [
+        Content(*row)
+        for row in db_conn.execute(
+            f"""SELECT id, platform, external_id, url, title, duration_s, uploader, upload_date FROM contents
+WHERE EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id AND files.file_type IN ({placeholders}))
+AND NOT EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id AND files.file_type = ?)
+ORDER BY id""",
+            (*source_file_types, file_type),
+        )
+    ]
+
+
 def add_content_file(
     db_conn: sqlite3.Connection,
     path: pathlib.Path,

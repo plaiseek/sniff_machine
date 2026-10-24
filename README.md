@@ -81,6 +81,12 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
      ```
      For each video of the channel it downloads the audio (mp3), converts it to 16 kHz mono wav, and dispatches the wav transcription jobs to all the Whisper servers in parallel. Results are saved as JSON in `cache/whisper_result/` and registered in the database. Failures are listed at the end of the run (exit code 1).
 
+   - **Transcribe the audios already in the database** — edit [transcript_pending_audios.py](transcript_pending_audios.py) to set the addresses of your Whisper servers, then:
+     ```bash
+     python transcript_pending_audios.py
+     ```
+     It selects every content with a `16k_mono_wav` or `ytdlp_audio` file but no `whisper_result` (e.g. after an interrupted channel run or failed transcriptions), builds the missing wavs and dispatches them to the Whisper servers in the same way, without listing any channel. Contents without audio (e.g. subtitles only) are left out.
+
    - **Download a channel's existing subtitles** — edit [sniff_channel_subtitles.py](sniff_channel_subtitles.py) to set the target channel URL(s), then:
      ```bash
      python sniff_channel_subtitles.py

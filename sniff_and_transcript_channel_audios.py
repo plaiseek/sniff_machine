@@ -10,15 +10,16 @@ import requests
 import sys
 import threading
 
-# whisper_servers = [
-#     f"192.168.0.27:{port}" for port in [8070, 8071, 8072, 8073, 8074, 8075]
-# ] + [f"127.0.0.1:{port}" for port in [8070, 8071]]
-whisper_servers = [f"127.0.0.1:{port}" for port in [8070, 8071]]
+whisper_servers = [
+    f"192.168.0.41:{port}" for port in [8070, 8071, 8072, 8073, 8074, 8075]
+] + [f"127.0.0.1:{port}" for port in [8070, 8071]]
+# whisper_servers = [f"127.0.0.1:{port}" for port in [8070, 8071]]
 assert_whisper_servers(whisper_servers)
 
 video_urls = list(
-    dict.fromkeys(ls_channel_videos("https://www.twitch.tv/troublante_acide/videos"))
+    dict.fromkeys(ls_channel_videos("https://www.youtube.com/@psyhodelik/videos"))
 )
+# video_urls = ["https://www.youtube.com/watch?v=2PxDP6yLg2w"]
 transcription_queue = Queue()
 downloads_done = threading.Event()
 failed_urls = []
@@ -37,7 +38,10 @@ def transcription_loop(whisper_server):
                 item = transcription_queue.get(timeout=1)
             except Empty:
                 # Stop once downloads are over and no other worker can still hand an item back
-                if downloads_done.is_set() and transcription_queue.unfinished_tasks == 0:
+                if (
+                    downloads_done.is_set()
+                    and transcription_queue.unfinished_tasks == 0
+                ):
                     return
                 continue
             i, content, wav_path = item
@@ -106,7 +110,9 @@ try:
                 queued_content_ids.add(content.id)
                 transcription_queue.put((i, content, wav_path))
             except Exception as e:
-                print(f"{log_prefix(i)} Failed to download audio for '{video_url}':\n{e}")
+                print(
+                    f"{log_prefix(i)} Failed to download audio for '{video_url}':\n{e}"
+                )
                 failed_urls.append((video_url, e))
 finally:
     downloads_done.set()
