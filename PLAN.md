@@ -2,7 +2,7 @@
 
 Reviewed at commit `3dbf8ee`. Every finding below was checked against the code (file:line references are to that commit). External facts (whisper.cpp, docker-py, pyannote.audio 4.x, SpeechBrain, sqlite-vec, yt-dlp extractors) were checked against their current sources where possible. Nothing was run on a GPU, so ROCm runtime behaviour is unverified and marked as such.
 
-**Status:** Phase 1 and the Phase 2 server are implemented on this branch (see the implementation notes at the end of each phase). Everything else is still to do.
+**Status:** Phase 1, the Phase 2 server and the Phase 3 migrations are implemented on this branch (see the implementation notes of each phase). Everything else is still to do.
 
 **Objectives, as I understand them:** download audio/video from YouTube, Twitch and French TV/radio/press, then transcribe → diarize → embed voices → identify speakers → analyse ("who said what", word counts). Everything is tracked in **one central SQLite database**, with GPU work done by **small, self-contained model servers** (one file per server, one client, one launcher, one script per feature).
 
@@ -185,7 +185,14 @@ The build-time `from_hparams` runs on CPU. It downloads the model and also prove
   - **v1** is the original schema.
   - **v2** rebuilds `contents` (only platform, external id and URL mandatory; `''`/`0` placeholders become `NULL`; new `channel_id`, `series`, `added_at`) and `files` (no `CHECK`; `variant` and `created_at`).
   - **v3** adds `diarizations`, `turns` and `turn_embeddings` as in 3.4.
-- Guarantees, tested: concurrent migrators (threads and processes) migrate once; a failing migration rolls back entirely; `contents` ids are never reused; `files` rows of contents deleted without foreign keys are dropped.
+- **Guarantees, tested:**
+  - concurrent migrators (threads and processes) migrate once, and a failure is not retried by the other threads of a process;
+  - a failing migration rolls back entirely;
+  - ids of `contents`, `diarizations` and `turns` are never reused;
+  - `files` rows of contents deleted without foreign keys are dropped by v2, and such pre-existing orphans never block a later migration;
+  - a damaged database, or columns, indexes or triggers added by hand to `contents`/`files`, stop v2 with an error naming them; views keep working;
+  - backups are written as `.partial`, fsynced, then renamed.
+- **Gap:** contents ingested before v2 have no `channel_id`/`series`. Backfill them from their `ytdlp_info` JSON before Phase 5 groups speakers per channel. The French TV and radio extractors often give no channel either; derive a key from the URL path for those.
 - **Still to do:**
   - The `failures` table (3.2) and the speaker tables of 3.4 (`speakers`, `speaker_samples`, `speaker_labels`) are left to the migration of the step that uses them; adding a table needs no rebuild. The speaker tables will follow the revised design: per-content voiceprints, and identities grouped per (person, channel).
   - The 3.3 helpers (repo-root paths, `upsert_content`, `contents_needing`) are not done yet.

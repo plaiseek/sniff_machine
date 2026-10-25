@@ -8,13 +8,18 @@ A pipeline for automatically downloading and transcribing videos from YouTube, T
 
 A SQLite database (`cache/test.db`, see [helpers/database.py](helpers/database.py)) keeps track of:
 
-- **`contents`**: every video/audio content sniffed (platform, external id, URL, title, duration, uploader, channel id, series, upload date). Only the platform, external id and URL are mandatory; metadata an extractor does not give is `NULL`.
+- **`contents`**: every video/audio content sniffed (platform, external id, URL, title, duration, uploader, channel id, series, upload date). Only the platform, external id and URL are mandatory; metadata an extractor does not give is `NULL` (except the title: yt-dlp substitutes a generic one).
 - **`files`**: files produced for each content (`ytdlp_info`, `ytdlp_audio`, `ytdlp_subtitles`, `16k_mono_wav`, `whisper_result`, ...), stored under `cache/`.
 - **`diarizations`**, **`turns`**, **`turn_embeddings`**: diarization runs of a content, their speaker turns, and one voice embedding per turn and model.
 
 All pipeline steps are idempotent: if a file is already registered in the database, it is not re-downloaded / re-computed.
 
-The schema is a list of migrations in [helpers/database.py](helpers/database.py) (`MIGRATIONS`), applied automatically when a script connects. Before migrating an existing database, a copy is saved in `cache/backups/`.
+The schema is a list of migrations in [helpers/database.py](helpers/database.py) (`MIGRATIONS`), applied automatically when a script connects. Before migrating an existing database, a copy is saved in `cache/backups/`. Stop running scripts before pulling a change that adds a migration. Unlike the rest of `cache/`, `cache/test.db` and `cache/backups/` cannot be recomputed: keep them when cleaning the cache.
+
+To restore a backup, stop every script and datasette, then copy it with SQLite's backup API (a plain `cp` over a database that still has a `test.db-wal` file can corrupt it):
+```bash
+python3 -c "import sqlite3; sqlite3.connect('cache/backups/<backup>.db').backup(sqlite3.connect('cache/test.db'))"
+```
 
 ### Model servers (Docker, AMD/ROCm)
 
