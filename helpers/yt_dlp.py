@@ -125,23 +125,41 @@ def get_ytdlp_content_mp3(
 
     mp3_path = Path(f"cache/ytdlp_audio/{content.platform}_{content.external_id}.mp3")
 
-    with yt_dlp.YoutubeDL(
-        {
-            "quiet": True,
-            "noprogress": True,  # the progress bar floods logs (one update every few ms)
-            "noplaylist": True,
-            "format": "bestaudio/best",
-            "outtmpl": str(mp3_path)[:-4],
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ],
-        }
-    ) as ydl:
-        ydl.download([url])
+    def download(audio_format: str, **options) -> None:
+        # yt-dlp appends to the partial file of a failed attempt or an earlier run, even one of
+        # another format (the direct and HLS downloads share this name): start from scratch
+        for suffix in (".part", ".ytdl"):
+            Path(str(mp3_path)[:-4] + suffix).unlink(missing_ok=True)
+        with yt_dlp.YoutubeDL(
+            {
+                **options,
+                "quiet": True,
+                "noprogress": True,  # the progress bar floods logs (one update every few ms)
+                "noplaylist": True,
+                "format": audio_format,
+                "outtmpl": str(mp3_path)[:-4],
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ],
+            }
+        ) as ydl:
+            ydl.download([url])
+
+    try:
+        download("bestaudio/best")
+    except yt_dlp.utils.DownloadError as e:
+        # Some YouTube videos answer 403 to every direct (https) format, even with an up-to-date
+        # yt-dlp, but serve the same audio (original language first) through HLS
+        if "HTTP Error 403" not in str(e):
+            raise
+        print(f"{url}: HTTP 403 on the direct formats, downloading through HLS", flush=True)
+        # A throttled HLS download loses fragments: fail instead of keeping audio with holes, which
+        # would shift every time after them
+        download("bestaudio[protocol^=m3u8]", skip_unavailable_fragments=False)
 
     if not mp3_path.is_file():
         raise ValueError(f"yt-dlp did not produce '{mp3_path}'")
