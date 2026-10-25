@@ -30,6 +30,16 @@ Rules that avoid wrong answers:
 - Upload dates are text: compare their first 10 characters, `substr(upload_date, 1, 10) BETWEEN '2026-03-01' AND '2026-03-31'`. `upload_date` can be NULL (unknown).
 - `uploader` is the channel name as the platform shows it; `channel_id` is the stable channel key (YouTube `UC...`), NULL for old contents.
 
+## Find the channel first
+
+The database stores a channel's display name (`uploader`, e.g. `Sniff Demo`) and its id (`channel_id`), not the `@handle` the user may give. List the channels, pick the one meant, and use its exact `uploader` (or `channel_id`) in the queries below:
+
+```bash
+python .claude/skills/query-database/query.py "SELECT uploader, channel_id, platform, COUNT(*) AS contents FROM contents GROUP BY 1, 2, 3 ORDER BY contents DESC"
+```
+
+An empty result can just mean the name did not match: never answer "there is none" before checking the name with this list.
+
 ## Ready-made queries
 
 Contents of a channel in a date range, with what is done:

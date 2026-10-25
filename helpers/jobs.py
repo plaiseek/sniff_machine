@@ -8,6 +8,7 @@ Exit codes: 0 everything done, 1 some contents failed (re-run the job to retry t
 
 import datetime
 import sys
+import traceback
 from pathlib import Path
 
 import helpers.database as db
@@ -111,15 +112,21 @@ def run_job(*args, **kwargs) -> int:
         job_path = Path(args[0] if args else kwargs["job_path"]).resolve()
         print(f"{job_path.name}: " + ("NOT RUNNING" if _lock(job_path) else "RUNNING"))
         return 0
+    dry_run = kwargs.get("dry_run", args[8] if len(args) > 8 else False)
     try:
         code = _run_job(*args, **kwargs)
     except KeyboardInterrupt:
         print("Job finished with exit code 130: interrupted, run the job again to resume.", flush=True)
-        raise
-    except BaseException as e:
+        return 130
+    except Exception as e:
+        # The error first, so that the final line is always the last one of the log
+        traceback.print_exc(file=sys.stdout)
         print(f"Job finished with exit code 1: crashed ({type(e).__name__}: {e}), see the error above.", flush=True)
-        raise
-    print(f"Job finished with exit code {code}: {EXIT_CODES[code]}.", flush=True)
+        return 1
+    if dry_run and code == 0:
+        print("Job finished with exit code 0: dry run only, nothing downloaded or computed yet.", flush=True)
+    else:
+        print(f"Job finished with exit code {code}: {EXIT_CODES[code]}.", flush=True)
     return code
 
 

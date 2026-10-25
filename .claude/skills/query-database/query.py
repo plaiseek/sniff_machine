@@ -37,8 +37,21 @@ if args.schema:
 if not args.sql:
     parser.error("give an SQL query, or --schema")
 
+def value(text: str):
+    """A number when the text is one (an SQL comparison of a computed number with a text value
+    is always false: `HAVING COUNT(*) >= '2'` matches nothing), else the text itself."""
+    for kind in (int, float):
+        try:
+            number = kind(text)
+        except ValueError:
+            continue
+        if str(number) == text:  # canonical only: '0123' or '1e3' stay texts
+            return number
+    return text
+
+
 try:
-    cursor = db_conn.execute(args.sql, args.params)
+    cursor = db_conn.execute(args.sql, [value(p) for p in args.params])
 except sqlite3.Error as e:
     sys.exit(f"SQL error: {e}")
 columns = [d[0] for d in cursor.description or []]

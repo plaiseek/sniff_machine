@@ -32,7 +32,7 @@ python check_servers.py transcribe      # only those a step needs: transcribe, d
    nohup python run_pyannote_servers.py > cache/pyannote_servers.log 2>&1 &
    ```
    The first start builds the Docker image: from 10 minutes to more than an hour. Pyannote also needs the `hf.token` file at the repository root (a Hugging Face token whose account accepted the conditions of `pyannote/speaker-diarization-community-1`); if it is missing, stop and tell the user.
-4. Run `python check_servers.py <kind>` every minute until it says `OK` (the model loads after the build). If the log shows `Traceback` or `ERROR`, stop and show the user the last 30 lines of the log.
+4. Run `python check_servers.py <kind>` every minute until it says `OK` (the model loads after the build). Stop and show the user the last 30 lines of the log if the log shows `Traceback`, `ERROR` or `Failed to build`, if the script is gone (`ps -ef | grep "[r]un_pyannote_servers"` prints nothing, with your kind's script name), or after 90 minutes.
 
 ## Rules
 

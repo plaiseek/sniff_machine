@@ -27,8 +27,8 @@ BASH_PATTERNS = [
     rf"{START}sqlite3\b{REST}test\.db{REST}\b(?:delete|update|drop|insert|alter|replace|create|vacuum)\b",
     # copying a file over the database
     rf"{START}(?:cp|rsync|dd)\b{REST}\s\S*cache/test\.db\s*(?:$|[;&|\n])",
-    # redirecting output into the database
-    r">\s*\S*cache/test\.db\b",
+    # redirecting output into the database (the redirect's target is a path to it)
+    r"(?<![<\w])>{1,2}\s*['\"]?[\w./~-]*cache/test\.db['\"]?(?=\s|$|[;&|)])",
 ]
 
 

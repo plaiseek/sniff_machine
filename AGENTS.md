@@ -28,7 +28,7 @@ Before doing one of these tasks, read the matching `SKILL.md` and follow it step
 ## Rules
 
 - Run every command from the repository root.
-- Never delete, move or overwrite `cache/`, `cache/test.db` or `cache/backups/`: they cannot be recomputed. Never change the database by hand (no `DELETE`, `UPDATE`, `DROP`): read it with `.claude/skills/query-database/query.py`. In Claude Code, `.claude/hooks/protect_data.py` blocks the usual ways of doing it.
+- Never delete, move or overwrite `cache/`, `cache/test.db` or `cache/backups/`: they cannot be recomputed. Never change the database by hand (no `DELETE`, `UPDATE`, `DROP`): read it with `.claude/skills/query-database/query.py`. In Claude Code, `.claude/hooks/protect_data.py` blocks the usual ways of doing it. Restoring a backup (`restore_backup.py`) is for the user to do.
 - Never run a `run_*_servers.py` script while `check_servers.py` says its servers are OK or BUSY: it restarts them and kills the work in progress.
 - Long commands (jobs, server builds) run in the background with a log file; check the log instead of waiting.
 - Do not commit `cache/`, `hf.token` or job logs.

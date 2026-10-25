@@ -24,7 +24,8 @@ URL table:
 
 | The request names | Put in `LISTING_URLS` |
 |---|---|
-| a YouTube channel: `@name`, `youtube.com/@name`, "the YouTube channel name" | `"https://www.youtube.com/@name/videos"` |
+| a YouTube channel handle: `@name`, `youtube.com/@name` | `"https://www.youtube.com/@name/videos"` |
+| a YouTube channel by its name only ("la chaîne Le Monde") | try `"https://www.youtube.com/@<name without spaces or accents>/videos"`, and check in the dry run that the listing's name is that channel; if the listing fails or is another channel, stop and ask the user for the channel's URL |
 | ... and its past live streams too | add `"https://www.youtube.com/@name/streams"` |
 | `youtube.com/channel/UC...` | `"https://www.youtube.com/channel/UC.../videos"` |
 | a Twitch channel: `twitch.tv/name`, "the Twitch channel name" | `"https://www.twitch.tv/name/videos?filter=archives"` |
@@ -90,11 +91,12 @@ DRY_RUN = True
 python jobs/<file>.py
 ```
 
-It prints one line per selected content (id, upload date, duration, what is already done), `N contents selected`, the entries it skipped and why, and ends with `Job finished with exit code N`. Check that every date is inside the bounds. The first listing of a channel fetches the details of each of its videos (about 1 to 3 s each, cached afterwards): it can take minutes.
+It prints the name of each listing (e.g. `Sniff Demo - Videos: 19 entries to check`), one line per selected content (id, upload date, duration, what is already done), `N contents selected`, the entries it skipped and why, and ends with `Job finished with exit code N`. Check that the listing is the channel the user meant and that every date is inside the bounds. The first listing of a channel fetches the details of each of its videos (about 1 to 3 s each, cached afterwards): it can take minutes.
 
 - Exit code 0: go on with step 5.
 - Exit code 1: some entries could not be checked (network error, rate limit): run the dry run once more; if they still fail, go on and mention them in your report.
 - Exit code 2 (`Invalid settings`): fix the settings lines it names and run again.
+- No `Job finished with exit code` line, but a Python `Traceback` (e.g. `SyntaxError`, `NameError`): a line you edited is broken (a missing quote, a `"` inside the docstring): fix it and run again.
 - `0 contents selected`: check the URL (YouTube needs the `/videos` tab) and the dates, then tell the user instead of guessing further.
 - Skipped entries marked members only, upcoming, live, private or removed cannot be downloaded: just list them in your report.
 

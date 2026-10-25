@@ -16,10 +16,12 @@ All pipeline steps are idempotent: if a file is already registered in the databa
 
 The schema is a list of migrations in [helpers/database.py](helpers/database.py) (`MIGRATIONS`), applied automatically when a script connects. Before migrating an existing database, a copy is saved in `cache/backups/`. Stop running scripts before pulling a change that adds a migration. Unlike the rest of `cache/`, `cache/test.db` and `cache/backups/` cannot be recomputed: keep them when cleaning the cache.
 
-To restore a backup, stop every script and datasette, then copy it with SQLite's backup API (a plain `cp` over a database that still has a `test.db-wal` file can corrupt it):
+To restore a backup, stop every script, job and datasette, then:
 ```bash
-python3 -c "import sqlite3; sqlite3.connect('cache/backups/<backup>.db').backup(sqlite3.connect('cache/test.db'))"
+python restore_backup.py                               # lists the backups
+python restore_backup.py cache/backups/<backup>.db
 ```
+It refuses a missing or damaged backup, saves the current database in `cache/backups/` first, and copies with SQLite's backup API (a plain `cp` over a database that still has a `test.db-wal` file can corrupt it).
 
 ### Model servers (Docker, AMD/ROCm)
 
