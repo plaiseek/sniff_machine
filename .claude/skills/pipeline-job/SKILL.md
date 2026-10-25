@@ -112,10 +112,9 @@ nohup python jobs/<file>.py >> jobs/<file>.log 2>&1 &
 
 ## 6. Check and report
 
-Read the end of the log (`tail -n 40 jobs/<file>.log`). Its last line gives the exit code: 0 everything done; 1 some contents failed (or the job crashed: the error is just above); 2 invalid settings; 3 already running; 4 a server is not ready, nothing done: stop and tell the user which server (the lines above say it), do not edit `servers.py` or restart servers; 130 interrupted: run it again.
+Read the end of the log (`tail -n 40 jobs/<file>.log`). Its last line gives the exit code: 0 everything done; 1 some contents failed (or the job crashed: the error is just above); 2 invalid settings; 3 already running; 4 a server is not ready, nothing done: stop and tell the user which server (the lines above say it), do not edit `servers.py` or restart servers; 5 a server is probably stuck (the line above names it): tell the user it needs a restart, do not run the job again and do not restart it yourself; 130 interrupted: run it again.
 
 - If some contents failed (`Failed ...` lines, exit code 1), run the same job once more: it only redoes what is missing. If the same contents fail again, report them with their error lines; do not change any code.
-- If the log says a server `is probably stuck`, do not run the job again: tell the user which server, it needs a restart, which only the user decides (see the `model-servers` skill).
 - Report to the user: the job file, the number of contents selected, how many are now downloaded / transcribed / diarized, the failures and skipped entries with their reasons.
 
 To answer questions about the results afterwards (speakers, turns, which videos are done), use the `query-database` skill. Running the job again with `DRY_RUN = True` also shows what is done for each content.

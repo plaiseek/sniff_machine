@@ -101,6 +101,7 @@ EXIT_CODES = {
     2: "invalid settings, nothing done",
     3: "this job is already running",
     4: "a server is not ready, nothing done",
+    5: "a server is probably stuck (see above): tell the user, it needs a restart, do not run the job again before",
 }
 
 
@@ -141,7 +142,7 @@ def _run_job(
     diarization_params: dict | None = None,
     dry_run: bool = False,
 ) -> int:
-    from helpers.pipeline import diarization_step, run_steps, transcription_step
+    from helpers.pipeline import diarization_step, print_stuck, run_steps, transcription_step
     from helpers.yt_dlp import get_ytdlp_content, list_contents
 
     diarization_params = {} if diarization_params is None else diarization_params
@@ -213,4 +214,5 @@ def _run_job(
         print_contents(db_conn, contents, diarization_params)
     if skipped:
         print(f"{len(skipped)} listing entries or URLs were skipped ({n_errors} errors), see above.")
-    return 1 if report.failures() or n_errors else 0
+    print_stuck(report)  # again, next to the final line that the agent reads
+    return 5 if report.stuck else 1 if report.failures() or n_errors else 0

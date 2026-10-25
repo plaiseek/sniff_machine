@@ -67,6 +67,7 @@ class Report:
     done: dict = field(default_factory=dict)  # step name -> [content]
     failed: dict = field(default_factory=dict)  # step name -> [(content, exception)]
     not_run: dict = field(default_factory=dict)  # step name -> [content]: no server left
+    stuck: list = field(default_factory=list)  # servers that did not answer within the upload timeout
 
     def failures(self) -> int:
         return (
@@ -76,7 +77,8 @@ class Report:
         )
 
     def exit_code(self) -> int:
-        return 1 if self.failures() else 0
+        """5 a server is probably stuck, 1 some contents failed, 0 everything done."""
+        return 5 if self.stuck else 1 if self.failures() else 0
 
 
 def transcription_step(whisper_servers: list[str], language: str = "fr") -> Step:
@@ -289,6 +291,7 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
                         retried = retry_or_fail(k, item, server, e, how)
                         back = ", the content goes back to the queue" if retried else ", the content failed (second time)"
                         if stuck:
+                            report.stuck.append(server)
                             log(
                                 f"{log_prefix(i)} Server {server} did not answer within {elapsed / 3600:.1f} h"
                                 + f"{back}. It is probably stuck: its worker stops (restart the server).\n{e}"
@@ -390,3 +393,12 @@ def print_report(report: Report) -> None:
         + (f", done now: {done}" if done else "")
         + f", {report.failures()} failures."
     )
+    print_stuck(report)
+
+
+def print_stuck(report: Report) -> None:
+    for server in report.stuck:
+        print(
+            f"Server {server} did not answer within {uploads.TIMEOUT_BASE_S // 3600} h: it is probably stuck"
+            " and needs a restart. Do not run this again before."
+        )
