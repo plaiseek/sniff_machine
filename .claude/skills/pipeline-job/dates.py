@@ -4,9 +4,9 @@
     python .claude/skills/pipeline-job/dates.py 2026-03        # a whole month
     python .claude/skills/pipeline-job/dates.py 2026           # a whole year
 
-Periods (relative to today, UTC): today, yesterday, this-week, last-week (the previous Monday to
-Sunday), this-month, last-month, this-year, last-year, last-N-days (e.g. last-7-days: the 7 days
-ending today, today included).
+Periods (relative to today in this machine's time zone): today, yesterday, this-week, last-week
+(the previous Monday to Sunday), this-month, last-month, this-year, last-year, last-N-days (e.g.
+last-7-days: the 7 days ending today, today included).
 """
 
 import datetime
@@ -49,7 +49,7 @@ def period(name: str, today: datetime.date) -> tuple[datetime.date, datetime.dat
 
 if len(sys.argv) != 2:
     sys.exit(f"usage: python {sys.argv[0]} PERIOD, PERIOD being one of: {PERIODS}")
-today = datetime.datetime.now(datetime.timezone.utc).date()
+today = datetime.date.today()  # local date: at 00:30 in Paris, UTC is still yesterday
 try:
     first, last = period(sys.argv[1].lower(), today)
 except ValueError:

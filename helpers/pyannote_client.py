@@ -16,6 +16,8 @@ def assert_pyannote_servers(addresses: list, busy_timeout_s: float = 600) -> str
     """Exit if a server is down. Returns the model the servers run (they must all run the same):
     it is part of what makes a content "diarized", so it is never guessed. Images built before
     Phase 4 cannot answer /health while they diarize: they are waited for (up to busy_timeout_s)."""
+    if not addresses:
+        sys.exit("No Pyannote server is listed in servers.py (PYANNOTE_SERVERS)")
     models, busy = set(), []
     for address in addresses:
         url = f"http://{address}/health"

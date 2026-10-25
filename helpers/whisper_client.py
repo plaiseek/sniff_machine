@@ -8,8 +8,11 @@ import time
 
 
 def assert_whisper_servers(addresses: list, loading_timeout_s: float = 600):
-    """Exit if a server is down. A server still loading its model is waited for (up to
-    loading_timeout_s), e.g. when a script starts right after run_whisper_servers.py."""
+    """Exit if a server is down. A server loading a model (503, e.g. during a POST /load) is waited
+    for, up to loading_timeout_s. A server that is starting is down: whisper.cpp only opens its
+    port once its model is loaded."""
+    if not addresses:
+        sys.exit("No Whisper server is listed in servers.py (WHISPER_SERVERS)")
     for address in addresses:
         # whisper.cpp serves /health: {"status":"ok"}, or 503 while the model is loading
         url = f"http://{address}/health"

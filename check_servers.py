@@ -28,7 +28,7 @@ if unknown := [kind for kind in kinds if kind not in KINDS]:
 down = 0
 for kind in dict.fromkeys(kinds):
     if not KINDS[kind]:
-        print(f"{kind:12} (no server listed in servers.py)")
+        print(f"{kind:12} {'-':22} DOWN (no server listed in servers.py)")
         down += 1
     for address in KINDS[kind]:
         try:
