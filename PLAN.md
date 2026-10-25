@@ -374,7 +374,8 @@ If corpus-wide "find this voice" queries become slow, add a **rebuildable** `vec
 - **Steps** (`helpers/pipeline.py`): the dispatch loop of 1.9 is now `run_steps(contents, steps)`, shared by every script: the main thread prepares the wavs, one worker per server runs each step (transcription, diarization, or a new one). `diarize_contents.py` (4.3) and `transcript_pending_audios.py` use it. A content is tried at most twice per step:
   - an error hands it to another server of the step;
   - a dropped connection hands it back, and the worker waits up to 5 minutes for its server to come back (gunicorn restarts a worker killed for lack of memory), so the 1.9 trade-off is gone: a content that crashes the server twice fails, and the others go on;
-  - a server failing 3 contents in a row loses its worker, instead of draining the queue while the healthy servers are busy.
+  - a server failing 3 contents that another server then did (with no success of its own in between) loses its worker; contents that fail everywhere never count against a server, so a lone server never stops for them;
+  - each step keeps its waiting contents in one list: a worker takes the first one that has not failed on its server (or any, when no other server is left), so retries never bounce between workers.
   - The wavs and transcription results are written under a temporary name then renamed, so two jobs working on the same contents never read a half-written file (they only waste GPU time).
 - **4.4 long VODs, measured** (research on the installed pyannote): the clustering's peak RAM is `8·n²` bytes for n training embeddings (about 1 to 2 per second of speech): about 3 GB for 3 h, 3.5 to 14 GB for 6 h, plus `reconstruct()` (about 3 GB for 6 h with 30 local speakers). Not windowed yet: measure with `docker stats` on the longest VOD first.
 
