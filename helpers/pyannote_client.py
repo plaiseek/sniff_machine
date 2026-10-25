@@ -7,7 +7,7 @@ import sys
 import time
 
 import helpers.database as db
-from helpers.ffmpeg import upload_timeout_s
+from helpers.uploads import post_wav
 
 # What servers built before Phase 4 run (their answers do not name the model)
 DEFAULT_MODEL = "pyannote/speaker-diarization-community-1"
@@ -65,17 +65,7 @@ def wav_to_pyannote_result(
 
 
 def _post(pyannote_address: str, wav_path: Path, params: dict | None) -> str:
-    with open(wav_path, "rb") as wav_file:
-        files = {"file": (wav_path.name, wav_file, "audio/wav")}
-        pyannote_url = f"http://{pyannote_address}/diarize"
-        # One timeout for everything: requests also applies the connect timeout to sending the
-        # upload, which a busy server may only read minutes later
-        response = requests.post(
-            pyannote_url,
-            files=files,
-            data={"params": json.dumps(params or {})},
-            timeout=upload_timeout_s(wav_path),
-        )
+    response = post_wav(f"http://{pyannote_address}/diarize", wav_path, {"params": json.dumps(params or {})})
     try:
         response.raise_for_status()
     except requests.exceptions.HTTPError as e:

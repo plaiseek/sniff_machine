@@ -37,6 +37,7 @@ python check_servers.py transcribe      # only those a step needs: transcribe, d
 ## Rules
 
 - **Never run a `run_*_servers.py` script when `check_servers.py` says OK or BUSY for that kind**: it first stops every running container of that kind, which kills the work in progress of running jobs.
+- A server can be stuck and still say OK or BUSY (e.g. a GPU hang): a job log then says it `is probably stuck` after a day without an answer. Tell the user which server; restarting it is their decision.
 - Stop servers only when the user asks. A `run_*_servers.py` started in a terminal stops its containers on Ctrl+C. One started in the background ignores Ctrl+C signals: stop its containers with the matching function, then kill the script:
   ```bash
   python -c "from helpers.pyannote_amd_server import stop_all_pyannote_containers as stop; stop()"

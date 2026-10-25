@@ -6,7 +6,7 @@ import requests
 import sys
 import time
 
-from helpers.ffmpeg import upload_timeout_s
+from helpers.uploads import post_wav
 
 
 def assert_whisper_servers(addresses: list, loading_timeout_s: float = 600):
@@ -104,12 +104,7 @@ def wav_to_whisper_result(
         if key not in supported_params:
             raise ValueError(f"{key} not supported !")
 
-    with open(wav_path, "rb") as wav_file:
-        files = {"file": (wav_path.name, wav_file, "audio/wav")}
-        whisper_url = f"http://{whisper_address}/inference"
-        # One timeout for everything: requests also applies the connect timeout to sending the
-        # upload, which a busy server may only read much later
-        response = requests.post(whisper_url, files=files, data=data, timeout=upload_timeout_s(wav_path))
+    response = post_wav(f"http://{whisper_address}/inference", wav_path, data)
 
     response.raise_for_status()
 
