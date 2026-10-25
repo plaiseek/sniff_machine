@@ -6,6 +6,8 @@ import requests
 import sys
 import time
 
+from helpers.ffmpeg import upload_timeout_s
+
 
 def assert_whisper_servers(addresses: list, loading_timeout_s: float = 600):
     """Exit if a server is down. A server loading a model (503, e.g. during a POST /load) is waited
@@ -105,9 +107,9 @@ def wav_to_whisper_result(
     with open(wav_path, "rb") as wav_file:
         files = {"file": (wav_path.name, wav_file, "audio/wav")}
         whisper_url = f"http://{whisper_address}/inference"
-        # No timeout: requests applies the connect timeout to sending the upload too, which a busy
-        # server may only read much later (a refused connection still fails at once)
-        response = requests.post(whisper_url, files=files, data=data, timeout=None)
+        # One timeout for everything: requests also applies the connect timeout to sending the
+        # upload, which a busy server may only read much later
+        response = requests.post(whisper_url, files=files, data=data, timeout=upload_timeout_s(wav_path))
 
     response.raise_for_status()
 

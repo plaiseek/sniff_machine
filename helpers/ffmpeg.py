@@ -73,3 +73,10 @@ def convert_to_16k_mono_wav(input_path: Path, output_path: Path, verbose: bool =
         details = "\n".join(f"[ffmpeg] {line}" for line in last_lines)
         raise RuntimeError(f"ffmpeg failed with exit code {proc.returncode}:\n{details}")
     os.replace(partial_path, output_path)
+
+
+def upload_timeout_s(wav_path: Path) -> float:
+    """Timeout of a request sending a wav to a model server: long enough for the upload, the wait
+    behind other requests and the inference, so that only a frozen server (process stuck, machine
+    gone without closing the connection) reaches it. A 16 kHz mono wav holds 32000 bytes per second."""
+    return 3600 + 3 * os.path.getsize(wav_path) / 32000

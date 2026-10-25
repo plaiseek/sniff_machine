@@ -10,9 +10,10 @@ while one worker thread per server runs a step on the wavs already prepared. Eve
 idempotent: what is already in the database is skipped, so re-running a script resumes it.
 
 A content is tried at most twice per step: an error hands it to another server of the step, a
-dropped connection (the server crashed, e.g. out of memory on a long audio) hands it back while
-the worker waits for its server to come back. A server not coming back, or failing several
-contents that another server then did, loses its worker.
+dropped connection (the server crashed, e.g. out of memory on a long audio) or a server that
+stopped answering hands it back while the worker waits for its server to come back. A server not
+coming back loses its worker. A server failing several contents in a row only takes the contents
+no better server can take, until it succeeds again.
 """
 
 import requests
@@ -30,9 +31,10 @@ from helpers.ffmpeg import convert_to_16k_mono_wav
 
 # How long a worker waits for its server to answer /health again after a dropped connection
 SERVER_RETURN_TIMEOUT_S = 300
-# A server failing that many contents that another server then did (with no success of its own in
-# between) is considered broken: its worker stops. Contents that fail everywhere never count.
+# A server failing that many contents in a row (errors or dropped connections) comes last when
+# contents are handed out, except for one try every RETRY_FAILING_SERVER_S: a success brings it back
 MAX_CONSECUTIVE_FAILURES = 3
+RETRY_FAILING_SERVER_S = 300
 
 _print_lock = threading.Lock()
 
@@ -130,12 +132,19 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
         names.append(step.name if step.name not in names else f"{step.name} #{len(names) + 1}")
     for name in names:
         report.done[name], report.failed[name], report.not_run[name] = [], [], []
+    # One worker per address: a server listed twice would get a twin that takes the content it just
+    # dropped while it restarts
+    addresses = [list(dict.fromkeys(step.servers)) for step in steps]
+    for name, step, servers in zip(names, steps, addresses, strict=True):
+        if len(servers) < len(step.servers):
+            log(f"Warning: a server is listed more than once for the {name} step, it gets one worker.")
     # Per step: the items waiting for a worker, as (i, content, wav path, servers that failed it),
-    # the items being worked on, and the servers whose worker still runs
+    # the items being worked on, the servers whose worker still runs, and their failures in a row
     pending = [[] for _ in steps]
     busy = [0 for _ in steps]
-    alive = [list(step.servers) for step in steps]
-    strikes = [dict.fromkeys(step.servers, 0) for step in steps]  # see MAX_CONSECUTIVE_FAILURES
+    alive = [list(servers) for servers in addresses]
+    errors = [dict.fromkeys(servers, 0) for servers in addresses]
+    last_error = [dict.fromkeys(servers, 0.0) for servers in addresses]  # time.monotonic()
     tries = {}  # (step index, content id) -> [(server, error, dropped)]: its failed tries
     cond = threading.Condition()  # guards all of the above
     preparation_done = threading.Event()
@@ -163,21 +172,28 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
             time.sleep(5)
         return False
 
-    def others(k, server, tried=()):
-        """Whether the worker of another server, that has not failed the item, still runs."""
-        return any(s != server and s not in tried for s in alive[k])
+    def others(k, server):
+        """Whether the worker of another server still runs."""
+        return any(s != server for s in alive[k])
+
+    def rank(k, server, tried):
+        """How well a server fits an item that failed on `tried` (lower is better): the servers
+        failing contents in a row come last, then those that failed this item, then (for a second
+        try) those whose last content failed."""
+        failing = errors[k][server]
+        on_hold = failing >= MAX_CONSECUTIVE_FAILURES and (
+            time.monotonic() - last_error[k][server] < RETRY_FAILING_SERVER_S
+        )
+        return (on_hold, server in tried, bool(tried) and failing > 0)
 
     def take(k, server):
-        """The next item for the worker of this server, or None when it must stop."""
+        """The next item for the worker of this server, or None when no work is left. A worker only
+        takes an item no running server fits better, so every item fits one of them."""
         with cond:
             while True:
-                if strikes[k][server] >= MAX_CONSECUTIVE_FAILURES and others(k, server):
-                    log(f"Server {server} failed {strikes[k][server]} contents that another server then did: its worker stops.")
-                    return None
                 for n, item in enumerate(pending[k]):
                     tried = item[3]
-                    # An item that failed on this server is left to another one, while there is one
-                    if server not in tried or not any(s not in tried for s in alive[k]):
+                    if rank(k, server, tried) <= min(rank(k, s, tried) for s in alive[k]):
                         busy[k] += 1
                         return pending[k].pop(n)
                 if no_work_left(k):
@@ -189,24 +205,22 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
             busy[k] -= 1
             cond.notify_all()
 
-    def succeeded(k, server, content):
+    def succeeded(k, server):
         with cond:
-            strikes[k][server] = 0
-            for s, _, dropped in tries.get((k, content.id), []):
-                if s != server and not dropped:
-                    strikes[k][s] += 1
+            errors[k][server] = 0
+            cond.notify_all()
 
     def failure(failed_tries):
-        """The error to report for a content, from its failed tries."""
-        _, error, dropped = failed_tries[-1]
-        first = failed_tries[0] if len(failed_tries) == 2 else None
-        if dropped:
-            twice = " twice" if first and first[2] else ""
-            error = RuntimeError(f"the server dropped the connection{twice} while working on it: {error}")
-        if first and not (dropped and first[2]):
-            how = "the server dropped the connection" if first[2] else "it failed too, see the log"
-            error = RuntimeError(f"{error} (first try, on {first[0]}: {how})")
-        return error
+        """The error to report for a content, from its failed tries: [(server, error, dropped)]."""
+        server, error, dropped = failed_tries[-1]
+        if len(failed_tries) == 1:
+            return error
+        first_server, _, first_dropped = failed_tries[0]
+        if dropped and first_dropped and first_server == server:
+            return RuntimeError(f"{server} dropped the connection twice while working on it: {error}")
+        last = f"{server} dropped the connection while working on it: {error}" if dropped else str(error)
+        first = "it dropped the connection" if first_dropped else "it failed too, see the log"
+        return RuntimeError(f"{last} (first try, on {first_server}: {first})")
 
     def retry_or_fail(k, item, server, error, dropped):
         """Hand the item back for another try (on another server, or on this one once it is back),
@@ -215,10 +229,12 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
         with cond:
             failed_tries = tries.setdefault((k, content.id), [])
             failed_tries.append((server, error, dropped))
+            errors[k][server] += 1
+            last_error[k][server] = time.monotonic()
             retry = len(failed_tries) < 2 and (dropped or others(k, server))
             if retry:
                 pending[k].append((i, content, wav_path, tried | {server}))
-                cond.notify_all()
+            cond.notify_all()
         if not retry:
             report.failed[names[k]].append((content, failure(failed_tries)))
         return retry
@@ -234,14 +250,14 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
                         log(f"{log_prefix(i)} [{server}] {step.verb} {wav_path}...")
                         result = step.run(db_conn, server, content, wav_path)
                         report.done[names[k]].append(content)
-                        succeeded(k, server, content)
+                        succeeded(k, server)
                         log(f"{log_prefix(i)} Done! -> {result}")
-                    except requests.exceptions.ConnectionError as e:
-                        # The server is down or crashed (maybe because of this content)
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                        # The server is down, crashed (maybe because of this content) or frozen
                         dropped = True
                         retried = retry_or_fail(k, item, server, e, dropped=True)
                         log(
-                            f"{log_prefix(i)} Server {server} is unreachable"
+                            f"{log_prefix(i)} Server {server} is unreachable or stopped answering"
                             + (", the content goes back to the queue" if retried else ", the content failed (second time)")
                             + f": waiting up to {SERVER_RETURN_TIMEOUT_S} s for the server to come back.\n{e}"
                         )
@@ -269,8 +285,8 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
     # Daemon threads: Ctrl+C stops the script at once instead of waiting for the work in progress
     workers = [
         threading.Thread(target=worker, args=(k, server), daemon=True)
-        for k, step in enumerate(steps)
-        for server in step.servers
+        for k, servers in enumerate(addresses)
+        for server in servers
     ]
     for w in workers:
         w.start()

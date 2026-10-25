@@ -4,6 +4,8 @@ import json
 import requests
 import sys
 
+from helpers.ffmpeg import upload_timeout_s
+
 
 def assert_speechbrain_servers(addresses: list):
     for address in addresses:
@@ -44,7 +46,7 @@ def wav_to_speechbrain_embeddings(
             speechbrain_url,
             files=files,
             data={"params": json.dumps(params)},
-            timeout=None,  # not (10, None): the connect timeout would also apply to sending the upload
+            timeout=upload_timeout_s(wav_path),  # one value: the connect timeout also applies to the upload
         )
     try:
         response.raise_for_status()
