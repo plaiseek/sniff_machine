@@ -1,3 +1,4 @@
+import os
 import subprocess
 from collections import deque
 from pathlib import Path
@@ -7,6 +8,9 @@ def convert_to_16k_mono_wav(input_path: Path, output_path: Path, verbose: bool =
     """Convert any audio file to 16 kHz mono PCM WAV, streaming ffmpeg logs."""
     # ffmpeg does not create missing output folders
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Written under a temporary name, then renamed: a script reading the wav meanwhile (e.g. another
+    # job uploading it to a server) never sees it half-written
+    partial_path = output_path.with_name(f"{output_path.stem}.{os.getpid()}.part{output_path.suffix}")
     cmd = [
         "ffmpeg",
         "-y",
@@ -31,7 +35,7 @@ def convert_to_16k_mono_wav(input_path: Path, output_path: Path, verbose: bool =
         "16000",
         "-c:a",
         "pcm_s16le",
-        str(output_path),
+        str(partial_path),
     ]
     proc = subprocess.Popen(
         cmd, stderr=subprocess.PIPE, text=True, errors="replace", bufsize=1
@@ -58,10 +62,14 @@ def convert_to_16k_mono_wav(input_path: Path, output_path: Path, verbose: bool =
     except BaseException:
         # e.g. KeyboardInterrupt: don't leave ffmpeg running in the background
         proc.kill()
+        proc.wait()
+        partial_path.unlink(missing_ok=True)
         raise
     if buffer.strip():
         log(buffer.strip())
 
     if proc.wait() != 0:
+        partial_path.unlink(missing_ok=True)
         details = "\n".join(f"[ffmpeg] {line}" for line in last_lines)
         raise RuntimeError(f"ffmpeg failed with exit code {proc.returncode}:\n{details}")
+    os.replace(partial_path, output_path)

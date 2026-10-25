@@ -2,7 +2,7 @@
 
 Reviewed at commit `3dbf8ee`. Every finding below was checked against the code (file:line references are to that commit). External facts (whisper.cpp, docker-py, pyannote.audio 4.x, SpeechBrain, sqlite-vec, yt-dlp extractors) were checked against their current sources where possible. Nothing was run on a GPU, so ROCm runtime behaviour is unverified and marked as such.
 
-**Status:** Phase 1, the Phase 2 server and the Phase 3 migrations are implemented on this branch (see the implementation notes of each phase). Everything else is still to do.
+**Status:** Phase 1, the Phase 2 server, the Phase 3 migrations and Phase 4 (diarization into the DB) are implemented on this branch, plus jobs (select contents by channel and upload dates, then download / transcribe / diarize them) and skills for AI agents (see the implementation notes of each phase). Everything else is still to do.
 
 **Objectives, as I understand them:** download audio/video from YouTube, Twitch and French TV/radio/press, then transcribe → diarize → embed voices → identify speakers → analyse ("who said what", word counts). Everything is tracked in **one central SQLite database**, with GPU work done by **small, self-contained model servers** (one file per server, one client, one launcher, one script per feature).
 
@@ -362,6 +362,24 @@ If corpus-wide "find this voice" queries become slow, add a **rebuildable** `vec
 ---
 
 ## Phase 4 — Diarization into the DB (README TODO 2, M)
+
+**Implementation notes (done).**
+- **Server** (`helpers/pyannote_amd_server.py`, rebuild the image to get it). The answer keeps its shape (`{speaker: [[start, end], ...]}` for `diarization` and `exclusive_diarization`, so `speechbrain_client` and images built before still work) and adds:
+  - `speaker_embeddings` (`{speaker: [floats] or null}`, rows of `labels()`; `null` for pyannote's all-zero rows and NaN rows, which would make the JSON invalid);
+  - `model`, `revision` (the Hugging Face commit in the image), `pyannote_audio`, `duration`.
+  - It also rejects counts outside 1-50, `num_speakers` together with `min`/`max`, and `min > max`: pyannote takes 0 for "unset", lets `num_speakers` silently win, and fails deep in sklearn otherwise.
+  - gunicorn runs 2 threads with the pipeline behind a lock, so `/health` answers during a diarization (`"busy": true`).
+- **Client** (`helpers/pyannote_client.py`): `assert_pyannote_servers()` returns the model the servers run (it is part of the "done" key); `pyannote_result_to_turns()` gives the regular and exclusive turns in ms with `overlap_ms` = the part of the turn where at least 2 speakers talk in the regular diarization (sweep line, checked against a brute force and `Annotation.get_overlap()`); `diarize_content()` stores a run.
+- **DB** (`helpers/database.py`): `add_diarization()` writes the `diarizations` row, all its turns and the raw answer (`cache/pyannote_result/<platform>_<id>_<diarization id>.json`, registered with `variant` = the diarization id) in one transaction, and does nothing if another script stored the same (content, model, params) meanwhile. `get_turns()`, `delete_diarization()` (4.5; there are no `speaker_labels` yet to protect).
+- **Steps** (`helpers/pipeline.py`): the dispatch loop of 1.9 is now `run_steps(contents, steps)`, shared by every script: the main thread prepares the wavs, one worker per server runs each step (transcription, diarization, or a new one), a server that goes down hands its work back to the others. `diarize_contents.py` (4.3) and `transcript_pending_audios.py` use it.
+- **4.4 long VODs, measured** (research on the installed pyannote): the clustering's peak RAM is `8·n²` bytes for n training embeddings (about 1 to 2 per second of speech): about 3 GB for 3 h, 3.5 to 14 GB for 6 h, plus `reconstruct()` (about 3 GB for 6 h with 30 local speakers). Not windowed yet: measure with `docker stats` on the longest VOD first.
+
+**Jobs and skills (done).** `jobs/job_template.py` holds the settings of one request (listings such as channel tabs, single URLs, upload dates, steps, language, diarization params, dry run) and calls `helpers/jobs.run_job()`. Listing by date (`helpers/yt_dlp.list_contents()`):
+- reads the listing page by page (`process=False`), so a newest-first listing (YouTube channel tabs, Twitch `/videos`) stops after 5 entries in a row older than the range;
+- YouTube's flat entries only have an approximate date ("3 weeks ago", with `youtubetab:approximate_date`): it is used, with a margin of one unit plus rounding, only to skip entries surely outside the range; the others get their exact date from their details (one request each, cached in the DB);
+- Twitch flat entries have no date: their details are fetched until the stop rule;
+- upcoming, live, members-only and removed contents are reported, not selected; network or rate-limit errors make the job exit with 1 (re-run to retry).
+- `.claude/skills/` (also listed in `AGENTS.md` for agents that do not load skills) turns requests such as "fetch, transcribe and diarize the videos of X uploaded between Y and Z" into a job, with a dry run first, and answers questions with read-only SQL. They were tested with a small model on sandbox copies with fake servers and a fake channel.
 
 | # | Change |
 |---|---|

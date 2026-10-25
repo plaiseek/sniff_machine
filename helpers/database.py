@@ -1,3 +1,4 @@
+import json
 import os
 import pathlib
 import sqlite3
@@ -288,6 +289,12 @@ class Content:
     duration_s: float | None
     uploader: str | None
     upload_date: str | None
+    channel_id: str | None = None
+    series: str | None = None
+
+
+# The columns of Content, in order: SELECT them explicitly (a migration may add columns to contents)
+CONTENT_COLUMNS = "id, platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series"
 
 
 def add_content(
@@ -317,15 +324,25 @@ def add_content(
         duration_s,
         uploader,
         upload_date,
+        channel_id,
+        series,
     )
     return content
+
+
+def get_content(db_conn: sqlite3.Connection, content_id: int) -> Content | None:
+    for row in db_conn.execute(
+        f"SELECT {CONTENT_COLUMNS} FROM contents WHERE id = ?", (content_id,)
+    ):
+        return Content(*row)
+    return None
 
 
 def get_content_from_url(
     db_conn: sqlite3.Connection, content_url: str
 ) -> Content | None:
     for row in db_conn.execute(
-        """SELECT id, platform, external_id, url, title, duration_s, uploader, upload_date FROM contents WHERE url = ?""",
+        f"SELECT {CONTENT_COLUMNS} FROM contents WHERE url = ?",
         (content_url,),
     ):
         return Content(*row)
@@ -336,11 +353,22 @@ def get_content_from_external_id(
     db_conn: sqlite3.Connection, platform: str, external_id: str
 ) -> Content | None:
     for row in db_conn.execute(
-        """SELECT id, platform, external_id, url, title, duration_s, uploader, upload_date FROM contents WHERE platform = ? AND external_id = ?""",
+        f"SELECT {CONTENT_COLUMNS} FROM contents WHERE platform = ? AND external_id = ?",
         (platform, external_id),
     ):
         return Content(*row)
     return None
+
+
+def set_content_channel(
+    db_conn: sqlite3.Connection, content_id: int, channel_id: str | None, series: str | None
+) -> None:
+    """Fill channel_id and series where they are still NULL (contents added before schema v2)."""
+    db_conn.execute(
+        "UPDATE contents SET channel_id = COALESCE(channel_id, ?), series = COALESCE(series, ?) WHERE id = ?",
+        (channel_id, series, content_id),
+    )
+    db_conn.commit()
 
 
 def get_contents_without_file(
@@ -353,11 +381,27 @@ def get_contents_without_file(
     return [
         Content(*row)
         for row in db_conn.execute(
-            f"""SELECT id, platform, external_id, url, title, duration_s, uploader, upload_date FROM contents
+            f"""SELECT {CONTENT_COLUMNS} FROM contents
 WHERE EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id AND files.file_type IN ({placeholders}))
 AND NOT EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id AND files.file_type = ?)
 ORDER BY id""",
             (*source_file_types, file_type),
+        )
+    ]
+
+
+def get_contents_with_file(
+    db_conn: sqlite3.Connection, file_types: list[str]
+) -> list[Content]:
+    """Contents with a file of one of `file_types` registered (not checked on disk), by id."""
+    placeholders = ", ".join("?" for _ in file_types)
+    return [
+        Content(*row)
+        for row in db_conn.execute(
+            f"""SELECT {CONTENT_COLUMNS} FROM contents
+WHERE EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id AND files.file_type IN ({placeholders}))
+ORDER BY id""",
+            file_types,
         )
     ]
 
@@ -367,31 +411,169 @@ def add_content_file(
     path: pathlib.Path,
     content_id: int,
     file_type: str,
+    variant: str = "",
 ) -> None:
     # REPLACE: re-registering a recomputed file (force=True, file deleted from disk) updates the row
     db_conn.execute(
-        "INSERT OR REPLACE INTO files (path, content_id, file_type) VALUES (?, ?, ?)",
-        (str(path), content_id, file_type),
+        "INSERT OR REPLACE INTO files (path, content_id, file_type, variant) VALUES (?, ?, ?, ?)",
+        (str(path), content_id, file_type, variant),
     )
     db_conn.commit()
 
 
 def get_content_file_path(
-    db_conn: sqlite3.Connection, content_id: int, file_type: str
+    db_conn: sqlite3.Connection, content_id: int, file_type: str, variant: str = ""
 ) -> pathlib.Path | None:
     for row in db_conn.execute(
-        "SELECT path FROM files WHERE content_id = ? AND file_type = ?",
-        (content_id, file_type),
+        "SELECT path FROM files WHERE content_id = ? AND file_type = ? AND variant = ?",
+        (content_id, file_type, variant),
     ):
         return pathlib.Path(row[0])
     return None
 
 
 def get_existing_content_file(
-    db_conn: sqlite3.Connection, content_id: int, file_type: str
+    db_conn: sqlite3.Connection, content_id: int, file_type: str, variant: str = ""
 ) -> pathlib.Path | None:
     """Registered path of a content file, or None if it is not registered or no longer on disk."""
-    path = get_content_file_path(db_conn, content_id, file_type)
+    path = get_content_file_path(db_conn, content_id, file_type, variant)
     if path is not None and path.is_file():
         return path
     return None
+
+
+def params_key(params: dict | None) -> str:
+    """The one text form of model params stored in the database (diarizations.params)."""
+    return json.dumps(params or {}, sort_keys=True)
+
+
+@dataclass
+class Turn:
+    id: int
+    diarization_id: int
+    speaker: str
+    start_ms: int
+    end_ms: int
+    exclusive: int
+    overlap_ms: int
+
+
+def get_diarization_id(
+    db_conn: sqlite3.Connection, content_id: int, model: str, params: dict | None = None
+) -> int | None:
+    for row in db_conn.execute(
+        "SELECT id FROM diarizations WHERE content_id = ? AND model = ? AND params = ?",
+        (content_id, model, params_key(params)),
+    ):
+        return row[0]
+    return None
+
+
+def add_diarization(
+    db_conn: sqlite3.Connection,
+    content_id: int,
+    model: str,
+    params: dict | None,
+    turns: list[tuple[str, int, int, int, int]],
+    result_text: str | None = None,
+    result_path: pathlib.Path | None = None,
+) -> int | None:
+    """Store a diarization run and all its turns, (speaker, start_ms, end_ms, exclusive, overlap_ms),
+    in one transaction, with the server's raw answer (`result_text`) written to `result_path` and
+    registered as its 'pyannote_result' file (variant = the diarization id). Returns the new
+    diarization id, or None if this (content, model, params) was already stored (e.g. by another
+    script meanwhile): nothing is written then."""
+    with db_conn:  # commits, or rolls back on any error: never a diarization without its turns
+        cursor = db_conn.execute(
+            "INSERT INTO diarizations (content_id, model, params) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+            (content_id, model, params_key(params)),
+        )
+        if cursor.rowcount == 0:
+            return None
+        diarization_id = int(cursor.lastrowid)
+        db_conn.executemany(
+            "INSERT INTO turns (diarization_id, speaker, start_ms, end_ms, exclusive, overlap_ms) VALUES (?, ?, ?, ?, ?, ?)",
+            [(diarization_id, *turn) for turn in turns],
+        )
+        if result_text is not None and result_path is not None:
+            path = result_path.with_name(f"{result_path.stem}_{diarization_id}{result_path.suffix}")
+            write_atomic(path, result_text)
+            db_conn.execute(
+                "INSERT OR REPLACE INTO files (path, content_id, file_type, variant) VALUES (?, ?, ?, ?)",
+                (str(path), content_id, "pyannote_result", str(diarization_id)),
+            )
+    return diarization_id
+
+
+def get_turns(
+    db_conn: sqlite3.Connection, diarization_id: int, exclusive: bool | None = None
+) -> list[Turn]:
+    """Turns of a diarization by start time: the exclusive ones (at most one speaker at a time),
+    the regular ones (with overlapping speech), or both (exclusive=None)."""
+    query = "SELECT id, diarization_id, speaker, start_ms, end_ms, exclusive, overlap_ms FROM turns WHERE diarization_id = ?"
+    args = [diarization_id]
+    if exclusive is not None:
+        query += " AND exclusive = ?"
+        args.append(int(exclusive))
+    return [Turn(*row) for row in db_conn.execute(query + " ORDER BY start_ms, id", args)]
+
+
+def delete_diarization(db_conn: sqlite3.Connection, diarization_id: int) -> None:
+    """Delete a diarization run: its turns and their embeddings go with it (ON DELETE CASCADE),
+    and so does the registration of its raw result file (the file itself is kept)."""
+    with db_conn:
+        db_conn.execute(
+            "DELETE FROM files WHERE file_type = 'pyannote_result' AND variant = ? AND content_id = (SELECT content_id FROM diarizations WHERE id = ?)",
+            (str(diarization_id), diarization_id),
+        )
+        db_conn.execute("DELETE FROM diarizations WHERE id = ?", (diarization_id,))
+
+
+def write_atomic(path: pathlib.Path, text: str) -> None:
+    """Write a text file so that a crash never leaves a half-written file that looks valid."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path = path.with_name(path.name + ".part")
+    with open(partial_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(partial_path, path)
+
+
+def find_contents(
+    db_conn: sqlite3.Connection,
+    ids: list[int] | None = None,
+    platform: str | None = None,
+    channel_id: str | None = None,
+    uploader: str | None = None,
+    title: str | None = None,
+    uploaded_from: str | None = None,
+    uploaded_to: str | None = None,
+) -> list[Content]:
+    """Contents matching every given filter, oldest upload first. `uploader` and `title` match a
+    case-insensitive substring; dates are inclusive YYYY-MM-DD bounds on the (UTC) upload date, and
+    contents with no known upload date are left out as soon as one bound is given."""
+    where, args = [], []
+    if ids is not None:
+        where.append(f"id IN ({', '.join('?' for _ in ids)})")
+        args += ids
+    if platform is not None:
+        where.append("platform = ?")
+        args.append(platform)
+    if channel_id is not None:
+        where.append("channel_id = ?")
+        args.append(channel_id)
+    if uploader is not None:
+        where.append("uploader LIKE '%' || ? || '%'")
+        args.append(uploader)
+    if title is not None:
+        where.append("title LIKE '%' || ? || '%'")
+        args.append(title)
+    if uploaded_from is not None:
+        where.append("substr(upload_date, 1, 10) >= ?")
+        args.append(uploaded_from)
+    if uploaded_to is not None:
+        where.append("substr(upload_date, 1, 10) <= ?")
+        args.append(uploaded_to)
+    query = f"SELECT {CONTENT_COLUMNS} FROM contents"
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    return [Content(*row) for row in db_conn.execute(query + " ORDER BY upload_date, id", args)]

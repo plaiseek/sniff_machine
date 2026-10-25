@@ -81,38 +81,59 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
    ```
    Each script builds the Docker image if needed, starts the containers, and streams their logs until you hit Ctrl+C.
 
-3. **Run a sniffing pipeline**:
+3. **Set the server addresses** in [servers.py](servers.py) (one `host:port` per container), and check them:
+   ```bash
+   python check_servers.py              # OK / BUSY / LOADING / DOWN for each server
+   ```
 
-   - **Transcribe a channel's audio with Whisper** — edit [sniff_and_transcript_channel_audios.py](sniff_and_transcript_channel_audios.py) to set the target channel URL and the addresses of your Whisper servers, then:
-     ```bash
-     python sniff_and_transcript_channel_audios.py
-     ```
-     For each video of the channel it downloads the audio (mp3), converts it to 16 kHz mono wav, and dispatches the wav transcription jobs to all the Whisper servers in parallel. Results are saved as JSON in `cache/whisper_result/` and registered in the database. Failures are listed at the end of the run (exit code 1).
+4. **Run a job**: copy [jobs/job_template.py](jobs/job_template.py) to `jobs/<name>.py`, edit its settings (channels or playlists to list, single URLs, upload dates, steps), then:
+   ```bash
+   python jobs/<name>.py
+   ```
+   With `DRY_RUN = True` (the template's default) it only lists the selected contents and what is already done for them. With `DRY_RUN = False` it downloads their audio (mp3, then a 16 kHz mono wav), and transcribes and/or diarizes them: each step is spread over all its servers in parallel while the next audios download. Every step is skipped when its result is already in the database, so re-running a job resumes it. The job ends with the list of failures (exit code 1) and one line per content showing what is stored for it.
 
-   - **Transcribe the audios already in the database** — edit [transcript_pending_audios.py](transcript_pending_audios.py) to set the addresses of your Whisper servers, then:
-     ```bash
-     python transcript_pending_audios.py
-     ```
-     It selects every content with a `16k_mono_wav` or `ytdlp_audio` file but no `whisper_result` (e.g. after an interrupted channel run or failed transcriptions), builds the missing wavs and dispatches them to the Whisper servers in the same way, without listing any channel. Contents without audio (e.g. subtitles only) are left out.
+   For example, "fetch, transcribe and diarize the videos of @name uploaded in March 2026":
+   ```python
+   LISTING_URLS = ["https://www.youtube.com/@name/videos"]
+   UPLOADED_FROM = "2026-03-01"
+   UPLOADED_TO = "2026-03-31"
+   STEPS = ["download", "transcribe", "diarize"]
+   ```
 
-   - **Download a channel's existing subtitles** — edit [sniff_channel_subtitles.py](sniff_channel_subtitles.py) to set the target channel URL(s), then:
-     ```bash
-     python sniff_channel_subtitles.py
-     ```
+5. **Or run a script** on what is already in the database:
 
-4. **Explore the database**:
+   - [transcript_pending_audios.py](transcript_pending_audios.py) transcribes every content with an audio file (`16k_mono_wav` or `ytdlp_audio`) and no `whisper_result`, e.g. after an interrupted job or failed transcriptions. Contents without audio (e.g. subtitles only) are left out.
+   - [diarize_contents.py](diarize_contents.py) diarizes every content with an audio file and no diarization yet for the server's model and the script's `params` (e.g. `{"num_speakers": 2}`). Each run is stored as a `diarizations` row with all its `turns` (regular and exclusive, with the overlapped speech of each turn), and the server's raw answer is kept in `cache/pyannote_result/`.
+   - [sniff_and_transcript_channel_audios.py](sniff_and_transcript_channel_audios.py) downloads and transcribes every video of a channel (a job without dates).
+   - [sniff_channel_subtitles.py](sniff_channel_subtitles.py) downloads a channel's existing subtitles.
+
+6. **Explore the database**:
    ```bash
    python3 -m datasette cache/test.db --port 8001
    ```
+
+## AI agents
+
+[AGENTS.md](AGENTS.md) (imported by [CLAUDE.md](CLAUDE.md)) describes the repository and its rules for AI coding agents, and [.claude/skills/](.claude/skills/) holds step-by-step procedures written so that a small model can follow them:
+
+| Skill | For requests like |
+|---|---|
+| [pipeline-job](.claude/skills/pipeline-job/SKILL.md) | "fetch, transcribe and diarize all videos from channel X uploaded between Y and Z": writes a job from the template, dry-runs it, runs it in the background and reports |
+| [query-database](.claude/skills/query-database/SKILL.md) | "which videos of X are not diarized yet?", "how long does each speaker talk in video N?" (read-only SQL) |
+| [model-servers](.claude/skills/model-servers/SKILL.md) | checking, starting or stopping the model servers |
+| [write-pipeline-script](.claude/skills/write-pipeline-script/SKILL.md) | anything the job template cannot do: a custom selection, a new step, an export |
+
+- Claude Code loads `.claude/skills/` and `CLAUDE.md`. Agents that follow the open Agent Skills convention (Codex, Gemini CLI, Cursor, Copilot, OpenCode, goose...) find the same skills through the `.agents/skills` link, and `GEMINI.md` imports `AGENTS.md` for Gemini CLI. Any other agent can simply be told to read `AGENTS.md` first.
+- In Claude Code, [.claude/hooks/protect_data.py](.claude/hooks/protect_data.py) (registered in [.claude/settings.json](.claude/settings.json)) blocks the usual ways an agent could destroy `cache/test.db` or `cache/backups/`: deleting, moving or copying over them, `git clean` with `-x`, SQL writes through the `sqlite3` command line.
+- The skills were tested with a small model on sandbox copies of the repository, with fake servers and fake channels: requests in English and French, relative dates ("la semaine dernière"), re-diarization with a speaker count, a server down, an ambiguous date (the agent asks), a failing content (retried once, then reported), single URLs, questions on the database and an export script. A local model (e.g. through `ollama launch`) needs a context of at least 64k tokens to hold a skill and a job's output.
 
 ## TODO
 
 See [PLAN.md](PLAN.md) for the full review and the phased improvement plan (bug fixes, DB migrations, SpeechBrain embedding server, speaker identification, new sources).
 
 1. Find a way to retrieve (or scrap) videos list of france.tv etc...
-2. Integrate the Pyannote diarization server into the sniffing pipeline
-3. Integrate the wtpsplit sentence segmentation into the sniffing pipeline
-4. Integrate the SpeechBrain embedding server into the pipeline: store turn embeddings in the database and identify speakers
+2. Integrate the wtpsplit sentence segmentation into the sniffing pipeline
+3. Integrate the SpeechBrain embedding server into the pipeline: store turn embeddings in the database and identify speakers
 
 ### Potential medias
 

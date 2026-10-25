@@ -20,13 +20,28 @@ from flask import Flask, request, jsonify
 import soundfile as sf
 import time
 from collections import defaultdict
+from huggingface_hub import try_to_load_from_cache
+from importlib.metadata import version
 import json
+import math
+import os
+import threading
 
 app = Flask(__name__)
 
 # Loaded from the copy in the image (HF_HUB_OFFLINE): no token needed
 pipeline = Pipeline.from_pretrained("{model}")
 pipeline.to(torch.device("cuda"))
+# The second gunicorn thread answers /health while the first one diarizes: only one diarization at a time
+pipeline_lock = threading.Lock()
+
+# Provenance, returned with every answer: the Hugging Face commit of the model copied in the image
+config_path = try_to_load_from_cache("{model}", "config.yaml")
+info = {{
+    "model": "{model}",
+    "revision": os.path.basename(os.path.dirname(config_path)) if isinstance(config_path, str) else None,
+    "pyannote_audio": version("pyannote.audio"),
+}}
 
 accepted_params = {{
     "num_speakers": int,
@@ -45,6 +60,16 @@ def verify_params(params: dict) -> list:
                 f"Key '{{key}}' expects type '{{expected_type.__name__}}' "
                 f"but received '{{type(value).__name__}}'."
             )
+        # pyannote takes 0 for "unset", and fails deep in sklearn for negative or huge counts
+        elif not 1 <= value <= 50:
+            errors.append(f"Key '{{key}}' must be between 1 and 50, got {{value}}.")
+    if errors:
+        return errors
+    # pyannote silently lets num_speakers override min_speakers and max_speakers
+    if "num_speakers" in params and ("min_speakers" in params or "max_speakers" in params):
+        errors.append("Give either num_speakers, or min_speakers and/or max_speakers.")
+    if params.get("min_speakers", 1) > params.get("max_speakers", 50):
+        errors.append("min_speakers must not be greater than max_speakers.")
     return errors
 
 class LineProgressHook:
@@ -60,7 +85,7 @@ class LineProgressHook:
 
 @app.route("/health", methods=["GET"])
 def health():
-    return {{"status": "ok", "model": "{model}"}}
+    return {{"status": "ok", "busy": pipeline_lock.locked(), **info}}
 
 @app.route("/diarize", methods=["POST"])
 def diarize():
@@ -83,9 +108,10 @@ def diarize():
         return jsonify({{"error": f"Cannot decode audio: {{e}}"}}), 400
     waveform = torch.from_numpy(samples.T)  # (channel, time)
     try:
-        output = pipeline(
-            {{"waveform": waveform, "sample_rate": sample_rate}}, hook=LineProgressHook(), **params
-        )
+        with pipeline_lock:
+            output = pipeline(
+                {{"waveform": waveform, "sample_rate": sample_rate}}, hook=LineProgressHook(), **params
+            )
     except Exception as e:
         print(e)
         return jsonify({{"error": str(e)}}), 400
@@ -97,7 +123,21 @@ def diarize():
     exclusive_diarization = defaultdict(list)
     for turn, speaker in output.exclusive_speaker_diarization:
         exclusive_diarization[speaker].append([turn.start, turn.end])
-    return jsonify({{"diarization": diarization, "exclusive_diarization": exclusive_diarization}})
+    # pyannote's own voice embedding of each speaker (rows in the order of labels(), not normalised),
+    # None when it has none: an all-zero row (a speaker only heard in overlapped speech) or a NaN one
+    # (too little speech), which would also make the JSON invalid. Used to relabel speakers across windows.
+    speaker_embeddings = {{}}
+    if output.speaker_embeddings is not None:
+        for speaker, row in zip(output.speaker_diarization.labels(), output.speaker_embeddings):
+            row = [float(x) for x in row.astype("float32")]
+            speaker_embeddings[speaker] = row if any(row) and all(map(math.isfinite, row)) else None
+    return jsonify({{
+        "diarization": diarization,
+        "exclusive_diarization": exclusive_diarization,
+        "speaker_embeddings": speaker_embeddings,
+        "duration": samples.shape[0] / sample_rate,
+        **info,
+    }})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
@@ -136,8 +176,9 @@ RUN mkdir -p /app && echo {base64_server_script} | base64 -d > /app/pyannote_ser
 ENV PYTHONUNBUFFERED=1
 # ENTRYPOINT ["python3", "/app/pyannote_server.py"]
 WORKDIR /app
-# --timeout 0: the sync worker would otherwise be killed while diarizing a long audio file
-ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "1", "--timeout", "0", "-b", "0.0.0.0:3000", "pyannote_server:app"]
+# --timeout 0: the worker would otherwise be killed while diarizing a long audio file.
+# --threads 2: /health keeps answering during a diarization (the pipeline itself is behind a lock)
+ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "2", "--timeout", "0", "-b", "0.0.0.0:3000", "pyannote_server:app"]
 """
     dk.build_image("amd_pyannote:latest", dockerfile, files={"hf.token": huggingface_token})
 

@@ -3,3 +3,5 @@ helpers/__pycache__
 cache
 old_cache
 *.token
+jobs/*.log
+__pycache__

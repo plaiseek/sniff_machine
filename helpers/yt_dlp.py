@@ -1,6 +1,8 @@
 import datetime
+import itertools
 import json
 import os
+import re
 import yt_dlp
 from pathlib import Path
 
@@ -74,6 +76,14 @@ def add_ytdlp_content(
                 series=info.get("series"),
             )
 
+        elif content.channel_id is None:
+            db.set_content_channel(
+                db_conn,
+                content.id,
+                info.get("channel_id") or info.get("uploader_id"),
+                info.get("series"),
+            )
+
         info_path = Path(
             f"cache/ytdlp_info/{content.platform}_{content.external_id}.json"
         )
@@ -110,6 +120,7 @@ def get_ytdlp_content_mp3(
     with yt_dlp.YoutubeDL(
         {
             "quiet": True,
+            "noprogress": True,  # the progress bar floods logs (one update every few ms)
             "noplaylist": True,
             "format": "bestaudio/best",
             "outtmpl": str(mp3_path)[:-4],
@@ -179,12 +190,249 @@ def get_ytdlp_content_srt(
 
 
 def ls_channel_videos(channel_url: str) -> list:
-    with yt_dlp.YoutubeDL(
-        {
-            "quiet": True,
-            "extract_flat": True,
-        }
-    ) as ydl:
-        info = ydl.extract_info(f"{channel_url}", download=False)
-        # print(info)
-        return [entry["url"] for entry in info["entries"]]
+    """URLs of every entry of a channel, playlist or show page."""
+    with yt_dlp.YoutubeDL(_LISTING_OPTIONS) as ydl:
+        return [
+            entry["url"]
+            for _, entries in _iter_listings(ydl, channel_url)
+            for entry in entries
+            if entry.get("url")
+        ]
+
+
+_LISTING_OPTIONS = {
+    "quiet": True,
+    "extract_flat": True,
+    # YouTube entries then carry an approximate upload time, computed from "3 weeks ago"
+    "extractor_args": {"youtubetab": {"approximate_date": [""]}},
+}
+
+
+def _iter_listings(ydl: yt_dlp.YoutubeDL, listing_url: str):
+    """Yield (name, entries) for each listing behind a URL, the entries being fetched page by page
+    as they are iterated. A YouTube channel URL without a tab gives its Videos, Live and Shorts tabs."""
+    try:
+        result = ydl.extract_info(listing_url, download=False, process=False)
+        while result.get("_type") in ("url", "url_transparent"):  # e.g. a redirect to another URL
+            result = ydl.extract_info(
+                result["url"], download=False, process=False, ie_key=result.get("ie_key")
+            )
+    except yt_dlp.utils.DownloadError as e:
+        if "does not have a" in str(e):  # e.g. "This channel does not have a streams tab"
+            print(f"  {str(e).splitlines()[0]}: nothing to list")
+            return
+        raise
+    if result.get("_type") not in ("playlist", "multi_video"):
+        raise ValueError(f"'{listing_url}' is a single content, not a listing: put it in CONTENT_URLS")
+    entries = iter(result.get("entries") or [])
+    first = next(entries, None)
+    if first is None:
+        return
+    entries = itertools.chain([first], entries)
+    if first.get("_type") == "playlist":  # nested listings
+        for listing in entries:
+            yield from _leaf_listings(listing)
+    else:
+        yield result.get("title") or listing_url, entries
+
+
+def _leaf_listings(result: dict):
+    entries = iter(result.get("entries") or [])
+    first = next(entries, None)
+    if first is None:
+        return
+    entries = itertools.chain([first], entries)
+    if first.get("_type") == "playlist":
+        for listing in entries:
+            yield from _leaf_listings(listing)
+    else:
+        yield result.get("title") or result.get("id"), entries
+
+
+def _is_newest_first(listing_url: str) -> bool:
+    """Whether a listing is sorted by upload date, newest first (YouTube channel tabs and Twitch
+    channel videos by default), so that it can be stopped once its contents get too old."""
+    youtube = re.match(
+        r"^https?://(?:www\.|m\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)"
+        r"(?:/(?:videos|streams|shorts))?/?(?:[?#]|$)",
+        listing_url,
+    )
+    twitch = re.match(r"^https?://(?:www\.|m\.)?twitch\.tv/[^/?#]+/videos/?(?:[?#]|$)", listing_url)
+    sort = re.search(r"[?&]sort=([^&#]*)", listing_url)
+    if youtube:
+        return sort is None or sort.group(1) == "dd"
+    if twitch:
+        # Clips and collections are sorted by views or by hand, whatever the sort parameter
+        if re.search(r"[?&]filter=(?:clips|collections)\b", listing_url):
+            return False
+        return sort is None or sort.group(1) == "time"
+    return False
+
+
+def _flat_date_bounds(entry: dict, today: datetime.date) -> tuple | None:
+    """(earliest, latest) possible upload date of a listing entry, from its flat timestamp, or None."""
+    timestamp, approximate = entry.get("timestamp"), entry.get("ie_key") == "Youtube"
+    if timestamp is None:  # an upcoming content: its scheduled start, exact
+        timestamp, approximate = entry.get("release_timestamp"), False
+    if timestamp is None:
+        return None
+    date = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc).date()
+    if approximate:
+        # Approximate ("3 weeks ago"): the error can reach one unit, which is inferred from the age,
+        # plus the rounding and the months or years of unequal lengths. yt-dlp rounds to the nearest
+        # UTC midnight, so "1 week ago" can look 6 days old: the thresholds lean to the larger unit
+        age = (today - date).days
+        unit = 1 if age < 6 else 7 if age < 27 else 31 if age < 360 else 366
+        # +4: "1 month ago" on March 1st is February 1st for yt-dlp, but up to 61 days for YouTube
+        margin = datetime.timedelta(days=unit + 4 + age // 30)
+    else:
+        # Exact time, but the date the content gets may be a local one
+        margin = datetime.timedelta(days=1)
+    return date - margin, date + margin
+
+
+def _backfill_channel(db_conn: db.sqlite3.Connection, content: db.Content) -> db.Content:
+    """Fill the channel of a content added before schema v2, from its cached yt-dlp info."""
+    if content.channel_id is not None:
+        return content
+    info_path = db.get_existing_content_file(db_conn, content.id, "ytdlp_info")
+    if info_path is None:
+        return content
+    with open(info_path) as f:
+        info = json.load(f)
+    channel_id = info.get("channel_id") or info.get("uploader_id")
+    if channel_id is None and info.get("series") is None:
+        return content
+    db.set_content_channel(db_conn, content.id, channel_id, info.get("series"))
+    return db.get_content(db_conn, content.id)
+
+
+def _is_temporary(e: Exception) -> bool:
+    """Whether an extraction error may go away on a later run (network, rate limit), rather than
+    being the platform's answer for this content (removed, private, geo-blocked, age-restricted)."""
+    text = str(e).lower()
+    temporary = (
+        "try again later", "not a bot", "429", "too many requests", "timed out", "temporar",
+        # YouTube served only images to this session (outdated yt-dlp, missing JS runtime, PO token)
+        "requested format is not available", "only images are available",
+    )
+    if any(s in text for s in temporary):
+        return True
+    if isinstance(e, ValueError):  # raised by add_ytdlp_content: live, upcoming, a playlist
+        return False
+    original = e.exc_info[1] if isinstance(e, yt_dlp.utils.DownloadError) and e.exc_info else e
+    # yt-dlp marks the platform's own refusals as expected
+    return not getattr(original, "expected", False)
+
+
+# Listing entries marked as never downloadable without an account
+_UNAVAILABLE = {
+    "subscriber_only": "members only",
+    "premium_only": "premium only",
+    "needs_auth": "needs an account",
+    "private": "private",
+}
+
+
+def list_contents(
+    db_conn: db.sqlite3.Connection,
+    listing_url: str,
+    uploaded_from: str | None = None,
+    uploaded_to: str | None = None,
+    older_streak: int = 5,
+) -> tuple[list[db.Content], list[tuple[str, str, bool]]]:
+    """The contents of a listing (channel or channel tab, playlist, show page) uploaded from
+    `uploaded_from` to `uploaded_to` (inclusive "YYYY-MM-DD" UTC dates, or None), registered in
+    the database, in listing order.
+
+    Returns (contents, skipped): `skipped` lists (url, reason, is_error) for the entries left out
+    without knowing their date: is_error is False when the content is unavailable (live or
+    upcoming, members only, private, removed, no upload date), True when the error may be
+    temporary (e.g. network, rate limit): running again may then select it.
+
+    The listing is read page by page, and the upload date of its entries checked in two passes:
+    1. the date given by the listing itself, when there is one (approximate for YouTube): entries
+       surely outside the dates are left out, and a listing sorted newest first stops after
+       `older_streak` entries in a row surely older than `uploaded_from`;
+    2. the exact date, from each remaining entry's details (one request each, cached in the
+       database), with the same stop rule."""
+    dated = uploaded_from is not None or uploaded_to is not None
+    first = datetime.date.fromisoformat(uploaded_from) if uploaded_from else datetime.date.min
+    last = datetime.date.fromisoformat(uploaded_to) if uploaded_to else datetime.date.max
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    contents, skipped = [], []
+
+    with yt_dlp.YoutubeDL(_LISTING_OPTIONS) as ydl:
+        newest_first = _is_newest_first(listing_url)
+        for name, entries in _iter_listings(ydl, listing_url):
+            # Pass 1: read the listing
+            candidates, older = [], 0
+            for entry in entries:
+                entry_url = entry.get("url") or entry.get("webpage_url")
+                if not entry_url:
+                    continue
+                if entry.get("_type") == "playlist" or entry.get("ie_key") == "YoutubeTab":
+                    skipped.append((entry_url, "a playlist, not a content: list it separately", False))
+                    continue
+                bounds = _flat_date_bounds(entry, today) if dated else None
+                if entry.get("live_status") in ("is_live", "is_upcoming"):
+                    # Listed first whatever their date (a stream scheduled long ago that never took
+                    # place stays "upcoming"): they never stop the listing. Reported if maybe in range.
+                    if bounds is None or (bounds[0] <= last and bounds[1] >= first):
+                        reason = "live now" if entry["live_status"] == "is_live" else "upcoming"
+                        skipped.append((entry_url, f"{reason}: run the job again once it is over", False))
+                    continue
+                if bounds is not None and bounds[0] > last:
+                    older = 0
+                    continue  # surely newer than uploaded_to
+                if bounds is not None and bounds[1] < first:
+                    older += 1
+                    if newest_first and older >= older_streak:
+                        break  # the rest of the listing is older
+                    continue  # surely older than uploaded_from
+                older = 0
+                # Entries that cannot be downloaded, and whose date may be in the range: reported
+                if entry.get("availability") in _UNAVAILABLE:
+                    skipped.append((entry_url, _UNAVAILABLE[entry["availability"]], False))
+                    continue
+                if (entry.get("title") or "").lower() in ("[private video]", "[deleted video]"):
+                    skipped.append((entry_url, entry["title"][1:-1].lower(), False))
+                    continue
+                candidates.append(entry)
+            print(f"  {name}: {len(candidates)} entries to check")
+
+            # Pass 2: the exact upload dates
+            older = 0
+            for i, entry in enumerate(candidates, 1):
+                entry_url = entry.get("url") or entry.get("webpage_url")
+                content = db.get_content_from_url(db_conn, entry_url)
+                if content is None and entry.get("ie_key") and entry.get("id"):
+                    content = db.get_content_from_external_id(db_conn, entry["ie_key"], entry["id"])
+                if content is None:
+                    print(f"  ({i}/{len(candidates)}) Fetching the details of {entry_url}...")
+                    try:
+                        content = add_ytdlp_content(db_conn, entry_url)
+                    except Exception as e:  # e.g. private, members only, removed, geo-blocked, network
+                        message = str(e).splitlines()[0] if str(e) else type(e).__name__
+                        skipped.append((entry_url, message, _is_temporary(e)))
+                        continue
+                else:
+                    content = _backfill_channel(db_conn, content)
+
+                if not dated:
+                    contents.append(content)
+                    continue
+                if content.upload_date is None:
+                    skipped.append((entry_url, "upload date unknown", False))
+                    continue
+                date = datetime.date.fromisoformat(content.upload_date[:10])
+                if date > last:
+                    older = 0
+                elif date < first:
+                    older += 1
+                    if newest_first and older >= older_streak:
+                        break
+                else:
+                    older = 0
+                    contents.append(content)
+    return contents, skipped

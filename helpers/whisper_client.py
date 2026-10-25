@@ -4,20 +4,30 @@ import json
 import os
 import requests
 import sys
+import time
 
 
-def assert_whisper_servers(addresses: list):
+def assert_whisper_servers(addresses: list, loading_timeout_s: float = 600):
+    """Exit if a server is down. A server still loading its model is waited for (up to
+    loading_timeout_s), e.g. when a script starts right after run_whisper_servers.py."""
     for address in addresses:
         # whisper.cpp serves /health: {"status":"ok"}, or 503 while the model is loading
         url = f"http://{address}/health"
         print(f"Checking {url}...")
-        try:
-            r = requests.get(url, timeout=5)
-            r.raise_for_status()
-            if r.json().get("status") != "ok":
-                raise ValueError(f"Unexpected Whisper.cpp response: {r.text}")
-        except (requests.exceptions.RequestException, ValueError) as e:
-            sys.exit(f"Whisper server {address} is not ready: {e}")
+        deadline = time.monotonic() + loading_timeout_s
+        while True:
+            try:
+                r = requests.get(url, timeout=5)
+                if r.status_code == 503 and time.monotonic() < deadline:
+                    print(f"Whisper server {address} is loading its model, waiting...", flush=True)
+                    time.sleep(10)
+                    continue
+                r.raise_for_status()
+                if r.json().get("status") != "ok":
+                    raise ValueError(f"Unexpected Whisper.cpp response: {r.text}")
+                break
+            except (requests.exceptions.RequestException, ValueError) as e:
+                sys.exit(f"Whisper server {address} is not ready: {e}")
 
 
 supported_params = [
