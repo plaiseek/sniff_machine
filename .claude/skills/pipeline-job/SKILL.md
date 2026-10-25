@@ -40,7 +40,16 @@ Dates (`UPLOADED_FROM` / `UPLOADED_TO`), compared with the upload date in UTC:
 | before 2025 (avant 2025) | `None` | `"2024-12-31"` |
 | no date ("all videos") | `None` | `None` |
 
-For relative dates, first run `date +%F` (today) and `date +%A` (weekday), then use: "last week" / "la semaine dernière" = the previous Monday to Sunday; "this week" = this week's Monday to today; "the last N days" = today minus N days to today; "last month" / "le mois dernier" = the whole previous calendar month; "this month" = the 1st of this month to today; "yesterday" = that day for both. Say in your report which dates you used.
+For a relative period, do not compute the dates yourself: run the script below and copy the two lines it prints into the job. Say in your report which dates you used.
+
+| The request says | Command |
+|---|---|
+| last week (la semaine dernière: the previous Monday to Sunday) | `python .claude/skills/pipeline-job/dates.py last-week` |
+| this week (cette semaine) | `python .claude/skills/pipeline-job/dates.py this-week` |
+| last month (le mois dernier) / this month (ce mois-ci) | `python .claude/skills/pipeline-job/dates.py last-month` / `... this-month` |
+| the last 30 days (les 30 derniers jours), today included | `python .claude/skills/pipeline-job/dates.py last-30-days` |
+| yesterday (hier) / today (aujourd'hui) | `python .claude/skills/pipeline-job/dates.py yesterday` / `... today` |
+| a whole month or year | `python .claude/skills/pipeline-job/dates.py 2026-03` / `... 2025` |
 
 **Stop and ask the user** when: you cannot tell which channel or URL is meant; a date is ambiguous (e.g. `03/04/2026`); the request asks for something these steps do not do (e.g. naming the speakers); the request asks to transcribe again contents already transcribed (e.g. in another language): a job never redoes a transcription, whatever `LANGUAGE` says. (Diarizing again with other `DIARIZATION_PARAMS` is supported: each set of params is a separate diarization.)
 
@@ -91,13 +100,13 @@ It prints one line per selected content (id, upload date, duration, what is alre
 
 ## 5. Real run
 
-Set `DRY_RUN = False` in the job file, then run it in the background with a log, because it can take hours (transcription and diarization each take minutes per hour of audio):
+Set `DRY_RUN = False` in the job file. Check that it is not already running: `python jobs/<file>.py --status` must print `NOT RUNNING` (if it prints `RUNNING`, do not start it again: go to the checks below). Then run it in the background, appending to its log (`>>`: a log is never overwritten), because it can take hours (transcription and diarization each take minutes per hour of audio):
 
 ```bash
-nohup python jobs/<file>.py > jobs/<file>.log 2>&1 &
+nohup python jobs/<file>.py >> jobs/<file>.log 2>&1 &
 ```
 
-(In Claude Code you can instead run `python jobs/<file>.py > jobs/<file>.log 2>&1` with `run_in_background`.) Check the progress every few minutes with `tail -n 20 jobs/<file>.log`. The job is finished when the last line of the log starts with `Job finished with exit code`. If that line does not come and `pgrep -f jobs/<file>.py` prints nothing, the job was killed (e.g. out of memory or a reboot): run it again, it resumes. Never start the same job twice (a second copy refuses to run, exit code 3), and do not run two jobs on the same contents at the same time.
+(In Claude Code you can instead run `python jobs/<file>.py >> jobs/<file>.log 2>&1` with `run_in_background`.) Check the progress every few minutes with `tail -n 20 jobs/<file>.log`. The job is finished when the last line of the log starts with `Job finished with exit code` and `python jobs/<file>.py --status` prints `NOT RUNNING`. A `Job finished with exit code 3` line means a second copy was started while the job was running: that copy stopped at once, the first one goes on, keep waiting. If the final line does not come and `python jobs/<file>.py --status` prints `NOT RUNNING`, the job was killed (e.g. out of memory or a reboot): run it again, it resumes. Do not run two jobs on the same contents at the same time.
 
 ## 6. Check and report
 

@@ -7,6 +7,7 @@ Exit codes: 0 everything done, 1 some contents failed (re-run the job to retry t
 """
 
 import datetime
+import sys
 from pathlib import Path
 
 import helpers.database as db
@@ -104,7 +105,12 @@ EXIT_CODES = {
 
 def run_job(*args, **kwargs) -> int:
     """_run_job(), ending with a line that gives the exit code (the log of a job run in the
-    background then says how it ended), even when it crashes or is interrupted."""
+    background then says how it ended), even when it crashes or is interrupted.
+    `python jobs/<job>.py --status` only says whether the job is running."""
+    if "--status" in sys.argv[1:]:
+        job_path = Path(args[0] if args else kwargs["job_path"]).resolve()
+        print(f"{job_path.name}: " + ("NOT RUNNING" if _lock(job_path) else "RUNNING"))
+        return 0
     try:
         code = _run_job(*args, **kwargs)
     except KeyboardInterrupt:

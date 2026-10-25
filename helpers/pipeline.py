@@ -151,6 +151,8 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
             try:
                 if requests.get(f"http://{server}/health", timeout=5).status_code == 200:
                     return True
+            except requests.exceptions.ReadTimeout:
+                return True  # connected, but busy (e.g. a one-thread server diarizing): it is alive
             except requests.exceptions.RequestException:
                 pass
             time.sleep(5)

@@ -5,8 +5,8 @@
     python .claude/skills/pipeline-job/dates.py 2026           # a whole year
 
 Periods (relative to today, UTC): today, yesterday, this-week, last-week (the previous Monday to
-Sunday), this-month, last-month, this-year, last-year, last-N-days (e.g. last-30-days: today minus
-N days to today).
+Sunday), this-month, last-month, this-year, last-year, last-N-days (e.g. last-7-days: the 7 days
+ending today, today included).
 """
 
 import datetime
@@ -37,7 +37,7 @@ def period(name: str, today: datetime.date) -> tuple[datetime.date, datetime.dat
     if name == "last-year":
         return datetime.date(today.year - 1, 1, 1), datetime.date(today.year - 1, 12, 31)
     if m := re.fullmatch(r"last-(\d+)-days?", name):
-        return today - int(m.group(1)) * day, today
+        return today - (max(int(m.group(1)), 1) - 1) * day, today
     if m := re.fullmatch(r"(\d{4})-(\d{2})", name):
         first = datetime.date(int(m.group(1)), int(m.group(2)), 1)
         following = (first + 31 * day).replace(day=1)

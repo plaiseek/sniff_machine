@@ -1,9 +1,9 @@
 """Job: <write the request here, e.g. "fetch, transcribe and diarize the videos of @name uploaded in March 2026">
 
 Copied from jobs/job_template.py: only the settings below were edited. Run it from the repository
-root with `python jobs/<this file>.py`. Re-running it resumes: what is already in the database is
-skipped. Exit codes: 0 done, 1 some contents failed (re-run to retry them), 2 invalid settings,
-3 already running, 4 a server is not ready.
+root with `python jobs/<this file>.py` (`--status` only says whether it is running). Re-running it
+resumes: what is already in the database is skipped. Exit codes: 0 done, 1 some contents failed
+(re-run to retry them), 2 invalid settings, 3 already running, 4 a server is not ready.
 """
 
 # ======================== Settings: edit only these lines ========================

@@ -102,9 +102,9 @@ def wav_to_whisper_result(
     with open(wav_path, "rb") as wav_file:
         files = {"file": (wav_path.name, wav_file, "audio/wav")}
         whisper_url = f"http://{whisper_address}/inference"
-        response = requests.post(
-            whisper_url, files=files, data=data, timeout=(10, None)
-        )
+        # No timeout: requests applies the connect timeout to sending the upload too, which a busy
+        # server may only read much later (a refused connection still fails at once)
+        response = requests.post(whisper_url, files=files, data=data, timeout=None)
 
     response.raise_for_status()
 

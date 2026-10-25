@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import requests
 import sys
+import time
 
 import helpers.database as db
 
@@ -11,26 +12,42 @@ import helpers.database as db
 DEFAULT_MODEL = "pyannote/speaker-diarization-community-1"
 
 
-def assert_pyannote_servers(addresses: list) -> str:
-    """Exit if a server is down. Returns the model the servers run (they must all run the same)."""
-    models = set()
+def assert_pyannote_servers(addresses: list, busy_timeout_s: float = 600) -> str:
+    """Exit if a server is down. Returns the model the servers run (they must all run the same):
+    it is part of what makes a content "diarized", so it is never guessed. Images built before
+    Phase 4 cannot answer /health while they diarize: they are waited for (up to busy_timeout_s)."""
+    models, busy = set(), []
     for address in addresses:
         url = f"http://{address}/health"
         print(f"Checking {url}...")
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
+            # Images built before Phase 4 only run the default model, and do not name it
             models.add(r.json().get("model") or DEFAULT_MODEL)
         except requests.exceptions.ReadTimeout:
-            # The server's only worker is busy (or still loading the model): requests will wait for it
-            print(f"Pyannote server {address} is busy or still loading.")
+            busy.append(address)  # its only thread is diarizing (or the model is still loading)
         except (requests.exceptions.RequestException, ValueError) as e:
             sys.exit(f"Pyannote server {address} is not ready: {e}")
+    deadline = time.monotonic() + busy_timeout_s
+    while not models and busy:
+        if time.monotonic() > deadline:
+            sys.exit(f"No Pyannote server answered /health within {busy_timeout_s:.0f} s (busy: {busy})")
+        print(f"Pyannote servers {busy} are busy or loading: waiting for one to answer...", flush=True)
+        time.sleep(10)
+        for address in busy:
+            try:
+                r = requests.get(f"http://{address}/health", timeout=5)
+                r.raise_for_status()
+                models.add(r.json().get("model") or DEFAULT_MODEL)
+                break
+            except requests.exceptions.ReadTimeout:
+                pass
+            except (requests.exceptions.RequestException, ValueError) as e:
+                sys.exit(f"Pyannote server {address} is not ready: {e}")
     if len(models) > 1:
         sys.exit(f"The Pyannote servers run different models: {sorted(models)}")
-    if not models:
-        print(f"No Pyannote server answered: assuming they run {DEFAULT_MODEL}.")
-    return models.pop() if models else DEFAULT_MODEL
+    return models.pop()
 
 
 def wav_to_pyannote_result(
@@ -48,11 +65,13 @@ def _post(pyannote_address: str, wav_path: Path, params: dict | None) -> str:
     with open(wav_path, "rb") as wav_file:
         files = {"file": (wav_path.name, wav_file, "audio/wav")}
         pyannote_url = f"http://{pyannote_address}/diarize"
+        # No timeout: requests applies the connect timeout to sending the upload too, which a busy
+        # server may only read minutes later (a refused connection still fails at once)
         response = requests.post(
             pyannote_url,
             files=files,
             data={"params": json.dumps(params or {})},
-            timeout=(10, None),
+            timeout=None,
         )
     try:
         response.raise_for_status()

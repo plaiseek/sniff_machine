@@ -32,7 +32,7 @@ app = Flask(__name__)
 # Loaded from the copy in the image (HF_HUB_OFFLINE): no token needed
 pipeline = Pipeline.from_pretrained("{model}")
 pipeline.to(torch.device("cuda"))
-# The second gunicorn thread answers /health while the first one diarizes: only one diarization at a time
+# The other gunicorn threads answer /health and read uploads while one diarizes: one diarization at a time
 pipeline_lock = threading.Lock()
 
 # Provenance, returned with every answer: the Hugging Face commit of the model copied in the image
@@ -100,21 +100,23 @@ def diarize():
         print(errors, flush=True)
         return jsonify({{"error": ", ".join(errors)}}), 400
 
-    # Decoded with soundfile and given to pyannote in memory: torchcodec is not needed
-    # (Werkzeug spools big uploads to a temporary file it deletes itself)
-    try:
-        samples, sample_rate = sf.read(audio.stream, dtype="float32", always_2d=True)
-    except Exception as e:
-        return jsonify({{"error": f"Cannot decode audio: {{e}}"}}), 400
-    waveform = torch.from_numpy(samples.T)  # (channel, time)
-    try:
-        with pipeline_lock:
+    # One diarization at a time. The upload is decoded under the lock too, so that requests waiting
+    # for their turn hold their (spooled) upload, not a decoded waveform, in memory
+    with pipeline_lock:
+        # Decoded with soundfile and given to pyannote in memory: torchcodec is not needed
+        # (Werkzeug spools big uploads to a temporary file it deletes itself)
+        try:
+            samples, sample_rate = sf.read(audio.stream, dtype="float32", always_2d=True)
+        except Exception as e:
+            return jsonify({{"error": f"Cannot decode audio: {{e}}"}}), 400
+        waveform = torch.from_numpy(samples.T)  # (channel, time)
+        try:
             output = pipeline(
                 {{"waveform": waveform, "sample_rate": sample_rate}}, hook=LineProgressHook(), **params
             )
-    except Exception as e:
-        print(e)
-        return jsonify({{"error": str(e)}}), 400
+        except Exception as e:
+            print(e)
+            return jsonify({{"error": str(e)}}), 400
 
     diarization = defaultdict(list)
     for turn, speaker in output.speaker_diarization:
@@ -177,8 +179,9 @@ ENV PYTHONUNBUFFERED=1
 # ENTRYPOINT ["python3", "/app/pyannote_server.py"]
 WORKDIR /app
 # --timeout 0: the worker would otherwise be killed while diarizing a long audio file.
-# --threads 2: /health keeps answering during a diarization (the pipeline itself is behind a lock)
-ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "2", "--timeout", "0", "-b", "0.0.0.0:3000", "pyannote_server:app"]
+# --threads 8: /health keeps answering and uploads keep being read during a diarization, even with
+# requests waiting for their turn (e.g. from a job killed meanwhile); the pipeline is behind a lock
+ENTRYPOINT ["gunicorn", "-w", "1", "--threads", "8", "--timeout", "0", "-b", "0.0.0.0:3000", "pyannote_server:app"]
 """
     dk.build_image("amd_pyannote:latest", dockerfile, files={"hf.token": huggingface_token})
 

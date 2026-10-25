@@ -44,7 +44,7 @@ def wav_to_speechbrain_embeddings(
             speechbrain_url,
             files=files,
             data={"params": json.dumps(params)},
-            timeout=(10, None),
+            timeout=None,  # not (10, None): the connect timeout would also apply to sending the upload
         )
     try:
         response.raise_for_status()

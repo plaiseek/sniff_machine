@@ -87,4 +87,4 @@ print(f"Wrote {OUTPUT} ({len(contents)} contents of '{UPLOADER}')")
 
 1. `python -m py_compile <script>.py` must print nothing.
 2. Run it on one content first (e.g. `db.find_contents(db_conn, ids=[<one id>])`), check its output and the database with the `query-database` skill.
-3. Then run it on everything, in the background with a log if it takes more than a few minutes: `nohup python <script>.py > <script>.log 2>&1 &`.
+3. Then run it on everything, in the background with a log if it takes more than a few minutes: `nohup python <script>.py >> <script>.log 2>&1 &`.
