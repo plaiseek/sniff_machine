@@ -180,6 +180,16 @@ The build-time `from_hparams` runs on CPU. It downloads the model and also prove
 
 ## Phase 3 — Database foundation (M)
 
+**Implementation notes (done: migrations v1–v3).**
+- `helpers/database.py` holds `MIGRATIONS`, applied by `connect()` in one transaction, after a `VACUUM INTO` backup in `cache/backups/`:
+  - **v1** is the original schema.
+  - **v2** rebuilds `contents` (only platform, external id and URL mandatory; `''`/`0` placeholders become `NULL`; new `channel_id`, `series`, `added_at`) and `files` (no `CHECK`; `variant` and `created_at`).
+  - **v3** adds `diarizations`, `turns` and `turn_embeddings` as in 3.4.
+- Guarantees, tested: concurrent migrators (threads and processes) migrate once; a failing migration rolls back entirely; `contents` ids are never reused; `files` rows of contents deleted without foreign keys are dropped.
+- **Still to do:**
+  - The `failures` table (3.2) and the speaker tables of 3.4 (`speakers`, `speaker_samples`, `speaker_labels`) are left to the migration of the step that uses them; adding a table needs no rebuild. The speaker tables will follow the revised design: per-content voiceprints, and identities grouped per (person, channel).
+  - The 3.3 helpers (repo-root paths, `upsert_content`, `contents_needing`) are not done yet.
+
 ### 3.1 Migrations with `PRAGMA user_version`
 
 Replace `create_tables()` with an append-only list applied inside `connect()`, so every script migrates on first use and `create_sqlite_db.py` becomes optional.

@@ -2,26 +2,20 @@ import os
 import pathlib
 import sqlite3
 import sqlite_vec
+import threading
+import time
 from dataclasses import dataclass
 
 db_path = pathlib.Path("cache/test.db")
 
-
-def connect():
-    os.makedirs(pathlib.Path(db_path).parent, exist_ok=True)
-    db_conn = sqlite3.connect(str(db_path))
-    db_conn.enable_load_extension(True)
-    sqlite_vec.load(db_conn)
-    db_conn.enable_load_extension(False)
-    db_conn.execute("PRAGMA journal_mode=WAL;")
-    db_conn.execute("PRAGMA foreign_keys = ON;")
-    return db_conn
-
-
-def create_tables(db_conn: sqlite3.Connection) -> None:
-    cursor = db_conn.cursor()
-    cursor.execute("""
-CREATE TABLE IF NOT EXISTS contents (
+# The schema, as a list of migrations applied in order by connect(): PRAGMA user_version is the
+# number of migrations already applied to a database. Never edit a migration that may have been
+# applied somewhere: append a new one. A migration that rebuilds a table must drop and recreate
+# the views and triggers that use it.
+MIGRATIONS = [
+    # v1: the original schema (does nothing on databases created before migrations existed)
+    [
+        """CREATE TABLE IF NOT EXISTS contents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     platform TEXT NOT NULL,
     external_id TEXT NOT NULL,
@@ -32,19 +26,167 @@ CREATE TABLE IF NOT EXISTS contents (
     upload_date TEXT NOT NULL,
     UNIQUE (platform, external_id),
     UNIQUE (url)
-)
-    """)
-    cursor.execute("""
-CREATE TABLE IF NOT EXISTS files (
+)""",
+        """CREATE TABLE IF NOT EXISTS files (
     path TEXT PRIMARY KEY,
     content_id INTEGER NOT NULL,
     file_type TEXT NOT NULL CHECK(file_type IN ('ytdlp_info', 'ytdlp_audio', 'ytdlp_subtitles', '16k_mono_wav', 'whisper_result', 'pyannote_result')),
     FOREIGN KEY(content_id) REFERENCES contents(id) ON DELETE CASCADE,
     UNIQUE (content_id, file_type)
-)
-    """)
-    db_conn.commit()
-    cursor.close()
+)""",
+    ],
+    # v2: contents where only the identity is mandatory (extractors often leave out uploader,
+    # duration or dates: '' and 0 placeholders become NULL), plus channel and series; files without
+    # the CHECK on file_type (a new feature only needs a new file type) and with a variant (e.g. a
+    # subtitles language) and a creation time. SQLite cannot drop a constraint: both are rebuilt.
+    [
+        "CREATE TEMP TABLE contents_sequence AS SELECT seq FROM sqlite_sequence WHERE name = 'contents'",
+        """CREATE TABLE contents_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,                    -- yt-dlp extractor_key
+    external_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT,
+    duration_s REAL,
+    uploader TEXT,
+    channel_id TEXT,                           -- yt-dlp channel_id (or uploader_id): stable channel key
+    series TEXT,                               -- programme name (TF1 and LCI are both the 'Wat' platform)
+    upload_date TEXT,                          -- ISO 8601 date or datetime
+    added_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (platform, external_id),
+    UNIQUE (url)
+)""",
+        """INSERT INTO contents_new (id, platform, external_id, url, title, duration_s, uploader, upload_date, added_at)
+SELECT id, platform, external_id, url, NULLIF(title, ''), NULLIF(duration_s, 0), NULLIF(uploader, ''), NULLIF(upload_date, ''), NULL
+FROM contents""",
+        "DROP TABLE contents",
+        "ALTER TABLE contents_new RENAME TO contents",
+        # Keep AUTOINCREMENT's high-water mark: ids of deleted contents are never reused
+        """UPDATE sqlite_sequence SET seq = MAX(seq, COALESCE((SELECT seq FROM temp.contents_sequence), 0))
+WHERE name = 'contents'""",
+        "DROP TABLE temp.contents_sequence",
+        """CREATE TABLE files_new (
+    path TEXT PRIMARY KEY,
+    content_id INTEGER NOT NULL,
+    file_type TEXT NOT NULL,
+    variant TEXT NOT NULL DEFAULT '',          -- '' unless several files of one type exist (e.g. 'fr')
+    created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    FOREIGN KEY(content_id) REFERENCES contents(id) ON DELETE CASCADE,
+    UNIQUE (content_id, file_type, variant)
+)""",
+        # Rows left behind by a content deleted without foreign keys (e.g. from datasette) are dropped
+        """INSERT INTO files_new (path, content_id, file_type, created_at)
+SELECT path, content_id, file_type, NULL FROM files WHERE content_id IN (SELECT id FROM contents)""",
+        "DROP TABLE files",
+        "ALTER TABLE files_new RENAME TO files",
+    ],
+    # v3: diarization runs, their speaker turns, and one voice embedding per turn and model
+    [
+        """CREATE TABLE diarizations (                -- one row per run: provenance, and 'done' even with 0 turns
+    id INTEGER PRIMARY KEY,
+    content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,                       -- e.g. 'pyannote/speaker-diarization-community-1'
+    params TEXT NOT NULL DEFAULT '{}',         -- json.dumps(params, sort_keys=True)
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (content_id, model, params)
+)""",
+        """CREATE TABLE turns (
+    id INTEGER PRIMARY KEY,
+    diarization_id INTEGER NOT NULL REFERENCES diarizations(id) ON DELETE CASCADE,
+    speaker TEXT NOT NULL,                     -- e.g. 'SPEAKER_00': only meaningful inside its diarization
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+    exclusive INTEGER NOT NULL CHECK (exclusive IN (0, 1)),  -- 1 = from the exclusive diarization
+    overlap_ms INTEGER NOT NULL DEFAULT 0      -- overlapped speech inside this turn
+)""",
+        "CREATE INDEX turns_by_diarization ON turns(diarization_id, exclusive, start_ms)",
+        """CREATE TABLE turn_embeddings (
+    turn_id INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,                       -- e.g. 'speechbrain/spkrec-ecapa-voxceleb'
+    embedding BLOB,                            -- L2-normalised float32 (sqlite_vec.serialize_float32), NULL = too short
+    PRIMARY KEY (turn_id, model)
+)""",
+    ],
+]
+
+# Only one thread of a process migrates (the backup cannot run inside the migration's transaction)
+_migration_lock = threading.Lock()
+
+
+def get_schema_version(db_conn: sqlite3.Connection) -> int:
+    return db_conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def migrate(db_conn: sqlite3.Connection) -> None:
+    """Apply the missing MIGRATIONS in one transaction, after backing up the database."""
+    if get_schema_version(db_conn) == len(MIGRATIONS):
+        return
+    with _migration_lock:
+        version = get_schema_version(db_conn)
+        if version == len(MIGRATIONS):
+            return  # migrated by another thread meanwhile
+        if version > len(MIGRATIONS):
+            raise RuntimeError(
+                f"{db_path} has schema v{version}, newer than this code (v{len(MIGRATIONS)}): update the code"
+            )
+        db_conn.commit()
+        if db_conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] > 0:
+            backup_dir = db_path.parent / "backups"
+            os.makedirs(backup_dir, exist_ok=True)
+            name = f"{db_path.stem}-v{version}-{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+            backup_path, n = backup_dir / f"{name}.db", 1
+            while backup_path.exists():  # e.g. a retry after a failed migration
+                backup_path, n = backup_dir / f"{name}-{n}.db", n + 1
+            db_conn.execute("VACUUM INTO ?", (str(backup_path),))  # consistent copy, even in WAL mode
+        else:
+            backup_path = None
+
+        isolation_level, db_conn.isolation_level = db_conn.isolation_level, None
+        # Foreign keys must be off while tables are rebuilt (DROP TABLE would cascade); the pragma
+        # is ignored inside a transaction
+        db_conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            db_conn.execute("BEGIN IMMEDIATE")  # another process migrating at the same time waits here
+            try:
+                version = get_schema_version(db_conn)  # re-read under the lock
+                for v, statements in enumerate(MIGRATIONS[version:], start=version + 1):
+                    for statement in statements:
+                        db_conn.execute(statement)
+                    db_conn.execute(f"PRAGMA user_version = {v}")
+                if problems := db_conn.execute("PRAGMA foreign_key_check").fetchall():
+                    raise RuntimeError(f"Foreign key violations after migration: {problems[:5]}")
+                db_conn.execute("COMMIT")
+                if backup_path is None:
+                    print(f"Created {db_path} (schema v{len(MIGRATIONS)})")
+                elif version < len(MIGRATIONS):  # not done by another process meanwhile
+                    print(
+                        f"Migrated {db_path} from schema v{version} to v{len(MIGRATIONS)} (backup: {backup_path})"
+                    )
+            except BaseException:
+                db_conn.execute("ROLLBACK")  # user_version is part of the transaction: all or nothing
+                raise
+        finally:
+            db_conn.execute("PRAGMA foreign_keys = ON")
+            db_conn.isolation_level = isolation_level
+
+
+def create_tables(db_conn: sqlite3.Connection) -> None:
+    """Kept for older scripts: connect() already creates or migrates the schema."""
+    migrate(db_conn)
+
+
+def connect():
+    """Connection to the database, created or migrated to the latest schema if needed."""
+    os.makedirs(pathlib.Path(db_path).parent, exist_ok=True)
+    # timeout: wait for another script's write (or migration) instead of failing after 5 s
+    db_conn = sqlite3.connect(str(db_path), timeout=30)
+    db_conn.enable_load_extension(True)
+    sqlite_vec.load(db_conn)
+    db_conn.enable_load_extension(False)
+    db_conn.execute("PRAGMA journal_mode=WAL;")
+    db_conn.execute("PRAGMA foreign_keys = ON;")
+    migrate(db_conn)
+    return db_conn
 
 
 @dataclass
@@ -53,10 +195,10 @@ class Content:
     platform: str
     external_id: str
     url: str
-    title: str
-    duration_s: int
-    uploader: str
-    upload_date: str
+    title: str | None
+    duration_s: float | None
+    uploader: str | None
+    upload_date: str | None
 
 
 def add_content(
@@ -64,15 +206,17 @@ def add_content(
     platform: str,
     external_id: str,
     url: str,
-    title: str,
-    duration_s: int,
-    uploader: str,
-    upload_date: str,
+    title: str | None,
+    duration_s: float | None,
+    uploader: str | None,
+    upload_date: str | None,
+    channel_id: str | None = None,
+    series: str | None = None,
 ) -> Content:
     cursor = db_conn.cursor()
     cursor.execute(
-        "INSERT INTO contents (platform, external_id, url, title, duration_s, uploader, upload_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (platform, external_id, url, title, duration_s, uploader, upload_date),
+        "INSERT INTO contents (platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series),
     )
     db_conn.commit()
     content = Content(

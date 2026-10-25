@@ -7,8 +7,8 @@ from pathlib import Path
 import helpers.database as db
 
 
-def _upload_date(info: dict) -> str:
-    """ISO-8601 upload date from yt-dlp info, or '' when the extractor gives none."""
+def _upload_date(info: dict) -> str | None:
+    """ISO-8601 upload date from yt-dlp info, or None when the extractor gives none."""
     timestamp = info.get("timestamp") or info.get("release_timestamp")
     if timestamp is not None:
         return datetime.datetime.fromtimestamp(
@@ -17,7 +17,7 @@ def _upload_date(info: dict) -> str:
     date = info.get("upload_date") or info.get("release_date")  # YYYYMMDD
     if date:
         return f"{date[:4]}-{date[4:6]}-{date[6:8]}"
-    return ""
+    return None
 
 
 def add_ytdlp_content(
@@ -60,16 +60,18 @@ def add_ytdlp_content(
                     return content
 
         if content is None:
-            # Many extractors leave out uploader, timestamp or duration
+            # Many extractors leave out uploader, timestamp or duration (stored as NULL)
             content = db.add_content(
                 db_conn,
                 info["extractor_key"],
                 info["id"],
                 url,
-                info.get("title") or "",
-                int(info.get("duration") or 0),
-                info.get("uploader") or info.get("channel") or info.get("series") or "",
+                info.get("title"),
+                info.get("duration"),
+                info.get("uploader") or info.get("channel") or info.get("series"),
                 _upload_date(info),
+                channel_id=info.get("channel_id") or info.get("uploader_id"),
+                series=info.get("series"),
             )
 
         info_path = Path(

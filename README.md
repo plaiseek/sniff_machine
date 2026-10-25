@@ -8,10 +8,13 @@ A pipeline for automatically downloading and transcribing videos from YouTube, T
 
 A SQLite database (`cache/test.db`, see [helpers/database.py](helpers/database.py)) keeps track of:
 
-- **`contents`**: every video/audio content sniffed (platform, external id, URL, title, duration, uploader, upload date).
-- **`files`**: files produced for each content (`ytdlp_info`, `ytdlp_audio`, `ytdlp_subtitles`, `16k_mono_wav`, `whisper_result`, `pyannote_result`), stored under `cache/`.
+- **`contents`**: every video/audio content sniffed (platform, external id, URL, title, duration, uploader, channel id, series, upload date). Only the platform, external id and URL are mandatory; metadata an extractor does not give is `NULL`.
+- **`files`**: files produced for each content (`ytdlp_info`, `ytdlp_audio`, `ytdlp_subtitles`, `16k_mono_wav`, `whisper_result`, ...), stored under `cache/`.
+- **`diarizations`**, **`turns`**, **`turn_embeddings`**: diarization runs of a content, their speaker turns, and one voice embedding per turn and model.
 
 All pipeline steps are idempotent: if a file is already registered in the database, it is not re-downloaded / re-computed.
+
+The schema is a list of migrations in [helpers/database.py](helpers/database.py) (`MIGRATIONS`), applied automatically when a script connects. Before migrating an existing database, a copy is saved in `cache/backups/`.
 
 ### Model servers (Docker, AMD/ROCm)
 
@@ -59,7 +62,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
 ## Usage
 
-1. **Create the database** (first time only):
+1. **Create the database** (optional: every script creates or migrates it when it connects):
    ```bash
    python create_sqlite_db.py
    ```
