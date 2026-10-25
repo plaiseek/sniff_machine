@@ -12,7 +12,7 @@ python .claude/skills/query-database/query.py "SELECT ..." [value for each ?]
 python .claude/skills/query-database/query.py --schema
 ```
 
-Put values in `?` placeholders instead of writing them in the SQL text: `query.py "SELECT id, title FROM contents WHERE uploader LIKE ?" "%name%"`. It prints at most 100 rows (`--limit N` for more). Never open `cache/test.db` with another tool to change it, and never delete it.
+Put values in `?` placeholders instead of writing them in the SQL text: `query.py "SELECT id, title FROM contents WHERE casefold(uploader) LIKE casefold(?)" "%name%"`. Compare names and titles with `casefold(...) LIKE casefold(?)`: plain `LIKE` ignores the case of A-Z only, so `LIKE '%élection%'` would miss "Élection". It prints at most 100 rows (`--limit N` for more). Never open `cache/test.db` with another tool to change it, and never delete it.
 
 ## Tables
 
@@ -40,7 +40,7 @@ SELECT c.id, substr(c.upload_date, 1, 10) AS uploaded, c.title,
   EXISTS (SELECT 1 FROM files f WHERE f.content_id = c.id AND f.file_type = 'whisper_result') AS transcribed,
   EXISTS (SELECT 1 FROM diarizations d WHERE d.content_id = c.id) AS diarized
 FROM contents c
-WHERE c.uploader LIKE ? AND substr(c.upload_date, 1, 10) BETWEEN ? AND ?
+WHERE casefold(c.uploader) LIKE casefold(?) AND substr(c.upload_date, 1, 10) BETWEEN ? AND ?
 ORDER BY c.upload_date
 ```
 (values: `"%name%" 2026-03-01 2026-03-31`)

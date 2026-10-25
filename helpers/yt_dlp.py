@@ -63,18 +63,26 @@ def add_ytdlp_content(
 
         if content is None:
             # Many extractors leave out uploader, timestamp or duration (stored as NULL)
-            content = db.add_content(
-                db_conn,
-                info["extractor_key"],
-                info["id"],
-                url,
-                info.get("title"),
-                info.get("duration"),
-                info.get("uploader") or info.get("channel") or info.get("series"),
-                _upload_date(info),
-                channel_id=info.get("channel_id") or info.get("uploader_id"),
-                series=info.get("series"),
-            )
+            try:
+                content = db.add_content(
+                    db_conn,
+                    info["extractor_key"],
+                    info["id"],
+                    url,
+                    info.get("title"),
+                    info.get("duration"),
+                    info.get("uploader") or info.get("channel") or info.get("series"),
+                    _upload_date(info),
+                    channel_id=info.get("channel_id") or info.get("uploader_id"),
+                    series=info.get("series"),
+                )
+            except db.sqlite3.IntegrityError:
+                # Added by another script meanwhile (e.g. two jobs listing the same channel)
+                content = db.get_content_from_url(db_conn, url) or db.get_content_from_external_id(
+                    db_conn, info["extractor_key"], info["id"]
+                )
+                if content is None:
+                    raise
 
         elif content.channel_id is None:
             db.set_content_channel(

@@ -3,7 +3,7 @@
 Copied from jobs/job_template.py: only the settings below were edited. Run it from the repository
 root with `python jobs/<this file>.py`. Re-running it resumes: what is already in the database is
 skipped. Exit codes: 0 done, 1 some contents failed (re-run to retry them), 2 invalid settings,
-3 already running, 4 a server is down.
+3 already running, 4 a server is not ready.
 """
 
 # ======================== Settings: edit only these lines ========================
@@ -21,7 +21,8 @@ UPLOADED_FROM = None
 UPLOADED_TO = None
 
 # What to do: "download" (audio), "transcribe" (whisper), "diarize" (pyannote: who speaks when).
-# The audio is always downloaded when another step needs it.
+# The audio is always downloaded when another step needs it. ["download"] alone also fetches again
+# the audio deleted from cache/ of contents already transcribed or diarized.
 STEPS = ["download", "transcribe", "diarize"]
 
 # Transcription language: a 2-letter code ("fr", "en", ...) or "auto"

@@ -97,11 +97,11 @@ Set `DRY_RUN = False` in the job file, then run it in the background with a log,
 nohup python jobs/<file>.py > jobs/<file>.log 2>&1 &
 ```
 
-(In Claude Code you can instead run `python jobs/<file>.py > jobs/<file>.log 2>&1` with `run_in_background`.) Check the progress every few minutes with `tail -n 20 jobs/<file>.log`. The job is finished when the last line of the log starts with `Job finished with exit code`. Never start the same job twice: a second copy refuses to run (exit code 3).
+(In Claude Code you can instead run `python jobs/<file>.py > jobs/<file>.log 2>&1` with `run_in_background`.) Check the progress every few minutes with `tail -n 20 jobs/<file>.log`. The job is finished when the last line of the log starts with `Job finished with exit code`. If that line does not come and `pgrep -f jobs/<file>.py` prints nothing, the job was killed (e.g. out of memory or a reboot): run it again, it resumes. Never start the same job twice (a second copy refuses to run, exit code 3), and do not run two jobs on the same contents at the same time.
 
 ## 6. Check and report
 
-Read the end of the log (`tail -n 40 jobs/<file>.log`). Its last line gives the exit code: 0 everything done; 1 some contents failed; 2 invalid settings; 3 already running; 4 a server is down.
+Read the end of the log (`tail -n 40 jobs/<file>.log`). Its last line gives the exit code: 0 everything done; 1 some contents failed (or the job crashed: the error is just above); 2 invalid settings; 3 already running; 4 a server is not ready, nothing done: stop and tell the user which server (the lines above say it), do not edit `servers.py` or restart servers; 130 interrupted: run it again.
 
 - If some contents failed (`Failed ...` lines, exit code 1), run the same job once more: it only redoes what is missing. If the same contents fail again, report them with their error lines; do not change any code.
 - Report to the user: the job file, the number of contents selected, how many are now downloaded / transcribed / diarized, the failures and skipped entries with their reasons.

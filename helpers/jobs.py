@@ -54,12 +54,15 @@ def _check_settings(listing_urls, content_urls, uploaded_from, uploaded_to, step
 
 
 def _lock(job_path: Path):
-    """Exclusive lock on the job file while the job runs, so that it never runs twice at once."""
+    """Exclusive lock held while the job runs, so that it never runs twice at once. It is taken on a
+    file of its own (cache/locks/<job>.lock): an editor or `sed -i` may replace the job file itself."""
     try:
         import fcntl
     except ImportError:  # not on Linux/macOS: no lock
         return True
-    lock_file = open(job_path, "rb")
+    lock_path = db.db_path.parent / "locks" / f"{job_path.name}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = open(lock_path, "a")
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -95,14 +98,21 @@ EXIT_CODES = {
     1: "some contents failed: run the job again to retry them",
     2: "invalid settings, nothing done",
     3: "this job is already running",
-    4: "a server is down, nothing done",
+    4: "a server is not ready, nothing done",
 }
 
 
 def run_job(*args, **kwargs) -> int:
     """_run_job(), ending with a line that gives the exit code (the log of a job run in the
-    background then says how it ended)."""
-    code = _run_job(*args, **kwargs)
+    background then says how it ended), even when it crashes or is interrupted."""
+    try:
+        code = _run_job(*args, **kwargs)
+    except KeyboardInterrupt:
+        print("Job finished with exit code 130: interrupted, run the job again to resume.", flush=True)
+        raise
+    except BaseException as e:
+        print(f"Job finished with exit code 1: crashed ({type(e).__name__}: {e}), see the error above.", flush=True)
+        raise
     print(f"Job finished with exit code {code}: {EXIT_CODES[code]}.", flush=True)
     return code
 
@@ -143,7 +153,7 @@ def _run_job(
             if "diarize" in steps:
                 gpu_steps.append(diarization_step(servers.PYANNOTE_SERVERS, diarization_params))
         except SystemExit as e:  # the client's server check failed
-            print(f"{e.code}\nNothing done: start the server or fix its address in servers.py, then run the job again.")
+            print(f"{e.code}\nNothing done: a server needed by the steps is not ready (see check_servers.py).")
             return 4
 
     skipped = []  # (url, reason, is_error): listing entries or URLs left out
@@ -183,6 +193,8 @@ def _run_job(
         print("Dry run: nothing downloaded or computed (set DRY_RUN = False to run the job).")
         return 1 if n_errors else 0
 
+    # With GPU steps, the audio is only fetched for the contents that still need one: audio deleted
+    # from cache/ to free disk space does not come back (STEPS = ["download"] alone fetches it)
     report = run_steps(contents, gpu_steps)
     with db.connect() as db_conn:
         print_contents(db_conn, contents, diarization_params)

@@ -108,9 +108,12 @@ def wav_to_whisper_result(
 
     response.raise_for_status()
 
+    # Written under a temporary name then renamed: never a half-written result that looks valid
     os.makedirs(whisper_result_path.parent, exist_ok=True)
-    with open(whisper_result_path, "w", encoding="utf-8") as f:
+    partial_path = whisper_result_path.with_name(f"{whisper_result_path.name}.{os.getpid()}.part")
+    with open(partial_path, "w", encoding="utf-8") as f:
         f.write(response.text)
+    os.replace(partial_path, whisper_result_path)
 
 
 def dtw_to_srt_timestamp(dtw: int) -> str:

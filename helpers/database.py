@@ -275,8 +275,14 @@ def connect():
     db_conn.enable_load_extension(False)
     db_conn.execute("PRAGMA journal_mode=WAL;")
     db_conn.execute("PRAGMA foreign_keys = ON;")
+    # casefold(text): case-insensitive comparisons that also fold accented letters (LIKE only folds ASCII)
+    db_conn.create_function("casefold", 1, _casefold, deterministic=True)
     migrate(db_conn)
     return db_conn
+
+
+def _casefold(text):
+    return text.casefold() if isinstance(text, str) else text
 
 
 @dataclass
@@ -310,11 +316,11 @@ def add_content(
     series: str | None = None,
 ) -> Content:
     cursor = db_conn.cursor()
-    cursor.execute(
-        "INSERT INTO contents (platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series),
-    )
-    db_conn.commit()
+    with db_conn:  # commits, or rolls back (e.g. another script added the same content meanwhile)
+        cursor.execute(
+            "INSERT INTO contents (platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series),
+        )
     content = Content(
         int(cursor.lastrowid),
         platform,
@@ -364,11 +370,11 @@ def set_content_channel(
     db_conn: sqlite3.Connection, content_id: int, channel_id: str | None, series: str | None
 ) -> None:
     """Fill channel_id and series where they are still NULL (contents added before schema v2)."""
-    db_conn.execute(
-        "UPDATE contents SET channel_id = COALESCE(channel_id, ?), series = COALESCE(series, ?) WHERE id = ?",
-        (channel_id, series, content_id),
-    )
-    db_conn.commit()
+    with db_conn:
+        db_conn.execute(
+            "UPDATE contents SET channel_id = COALESCE(channel_id, ?), series = COALESCE(series, ?) WHERE id = ?",
+            (channel_id, series, content_id),
+        )
 
 
 def get_contents_without_file(
@@ -414,11 +420,11 @@ def add_content_file(
     variant: str = "",
 ) -> None:
     # REPLACE: re-registering a recomputed file (force=True, file deleted from disk) updates the row
-    db_conn.execute(
-        "INSERT OR REPLACE INTO files (path, content_id, file_type, variant) VALUES (?, ?, ?, ?)",
-        (str(path), content_id, file_type, variant),
-    )
-    db_conn.commit()
+    with db_conn:  # commits, or rolls back: a failed write never keeps the database locked
+        db_conn.execute(
+            "INSERT OR REPLACE INTO files (path, content_id, file_type, variant) VALUES (?, ?, ?, ?)",
+            (str(path), content_id, file_type, variant),
+        )
 
 
 def get_content_file_path(
@@ -532,7 +538,8 @@ def delete_diarization(db_conn: sqlite3.Connection, diarization_id: int) -> None
 def write_atomic(path: pathlib.Path, text: str) -> None:
     """Write a text file so that a crash never leaves a half-written file that looks valid."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial_path = path.with_name(path.name + ".part")
+    # One temporary name per process and thread: two writers never share it
+    partial_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")
     with open(partial_path, "w", encoding="utf-8") as f:
         f.write(text)
     os.replace(partial_path, path)
@@ -549,8 +556,9 @@ def find_contents(
     uploaded_to: str | None = None,
 ) -> list[Content]:
     """Contents matching every given filter, oldest upload first. `uploader` and `title` match a
-    case-insensitive substring; dates are inclusive YYYY-MM-DD bounds on the (UTC) upload date, and
-    contents with no known upload date are left out as soon as one bound is given."""
+    substring, ignoring case (accented letters included); dates are inclusive YYYY-MM-DD bounds on
+    the (UTC) upload date, and contents with no known upload date are left out as soon as one bound
+    is given."""
     where, args = [], []
     if ids is not None:
         where.append(f"id IN ({', '.join('?' for _ in ids)})")
@@ -562,10 +570,10 @@ def find_contents(
         where.append("channel_id = ?")
         args.append(channel_id)
     if uploader is not None:
-        where.append("uploader LIKE '%' || ? || '%'")
+        where.append("instr(casefold(uploader), casefold(?)) > 0")
         args.append(uploader)
     if title is not None:
-        where.append("title LIKE '%' || ? || '%'")
+        where.append("instr(casefold(title), casefold(?)) > 0")
         args.append(title)
     if uploaded_from is not None:
         where.append("substr(upload_date, 1, 10) >= ?")

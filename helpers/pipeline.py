@@ -1,6 +1,6 @@
 """Run processing steps (transcription, diarization, ...) on contents, spread over model servers.
 
-    contents = [...]  # db.Content rows, e.g. from helpers.yt_dlp.list_channel_contents()
+    contents = [...]  # db.Content rows, e.g. from helpers.yt_dlp.list_contents()
     report = run_steps(contents, [transcription_step(servers.WHISPER_SERVERS, "fr"),
                                   diarization_step(servers.PYANNOTE_SERVERS)])
     sys.exit(report.exit_code())
@@ -8,11 +8,17 @@
 The main thread prepares the 16 kHz mono wav of each content (downloading its audio if needed),
 while one worker thread per server runs a step on the wavs already prepared. Every step is
 idempotent: what is already in the database is skipped, so re-running a script resumes it.
+
+A content is tried at most twice per step: an error hands it to another server of the step, a
+dropped connection (the server crashed, e.g. out of memory on a long audio) hands it back while
+the worker waits for its server to come back. A server failing several contents in a row, or
+not coming back, loses its worker.
 """
 
 import requests
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass, field
 from math import log10
 from pathlib import Path
@@ -22,6 +28,11 @@ from typing import Callable
 import helpers.database as db
 from helpers.ffmpeg import convert_to_16k_mono_wav
 
+
+# How long a worker waits for its server to answer /health again after a dropped connection
+SERVER_RETURN_TIMEOUT_S = 300
+# A server failing that many contents in a row is considered broken: its worker stops
+MAX_CONSECUTIVE_FAILURES = 3
 
 _print_lock = threading.Lock()
 
@@ -110,50 +121,119 @@ def prepare_wav(db_conn: sqlite3.Connection, content: db.Content) -> Path:
 
 def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
     """Prepare the wav of every content that still needs a step, and run the steps on them.
-    With no step, only the wavs are prepared (audio download + conversion)."""
+    With no step, only the wavs are prepared (audio download + conversion). A content whose steps
+    are all done is skipped even if its audio was deleted since (e.g. to free disk space)."""
     report = Report(contents=len(contents))
+    # Steps may share a name (e.g. two diarizations with different params): the report tells them apart
+    names = []
     for step in steps:
-        report.done[step.name], report.failed[step.name], report.not_run[step.name] = [], [], []
-    queues = {step.name: Queue() for step in steps}
+        names.append(step.name if step.name not in names else f"{step.name} #{len(names) + 1}")
+    for name in names:
+        report.done[name], report.failed[name], report.not_run[name] = [], [], []
+    queues = [Queue() for _ in steps]
+    alive = [len(step.servers) for step in steps]  # workers still running, per step
+    attempts = {}  # (step index, content id) -> times it failed or dropped a server
+    lock = threading.Lock()
     preparation_done = threading.Event()
 
     def log_prefix(i):
         n = max(len(contents), 1)
         return f"({i:{1 + int(log10(n))}}/{n})"
 
-    def worker(step, server):
-        queue = queues[step.name]
-        with db.connect() as db_conn:
-            while True:
-                try:
-                    item = queue.get(timeout=1)
-                except Empty:
-                    # Stop once preparations are over and no other worker can still hand an item back
-                    if preparation_done.is_set() and queue.unfinished_tasks == 0:
-                        return
-                    continue
-                i, content, wav_path = item
-                try:
-                    log(f"{log_prefix(i)} [{server}] {step.verb} {wav_path}...")
-                    result = step.run(db_conn, server, content, wav_path)
-                    report.done[step.name].append(content)
-                    log(f"{log_prefix(i)} Done! -> {result}")
-                except requests.exceptions.ConnectionError as e:
-                    # This server is down: hand the item back to the other servers of the step and stop
-                    queue.put(item)
-                    log(f"{log_prefix(i)} Server {server} is unreachable, stopping its worker:\n{e}")
-                    return
-                except Exception as e:
-                    report.failed[step.name].append((content, e))
-                    log(f"{log_prefix(i)} {step.name.capitalize()} of '{wav_path}' failed:\n{e}")
-                finally:
-                    # After the hand-back put(): the count never drops to 0 while the item is pending
-                    queue.task_done()
+    def no_work_left(k):
+        return preparation_done.is_set() and queues[k].unfinished_tasks == 0
+
+    def wait_for_server(k, server):
+        """True once the server answers /health again, False if it does not within the timeout
+        (or if no work is left for it)."""
+        deadline = time.monotonic() + SERVER_RETURN_TIMEOUT_S
+        while time.monotonic() < deadline and not no_work_left(k):
+            try:
+                if requests.get(f"http://{server}/health", timeout=5).status_code == 200:
+                    return True
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(5)
+        return False
+
+    def retry_or_fail(k, item, server, error, dropped):
+        """Hand the item back for another try (on another server, or on this one once it is back),
+        or record its failure if it already failed once, or if no other server can take it."""
+        i, content, wav_path, tried = item
+        with lock:
+            n = attempts[(k, content.id)] = attempts.get((k, content.id), 0) + 1
+            retry = n < 2 and (dropped or alive[k] > 1)
+        if retry:
+            queues[k].put((i, content, wav_path, tried | {server}))
+        else:
+            if dropped:
+                error = RuntimeError(f"the server dropped the connection twice while working on it: {error}")
+            report.failed[names[k]].append((content, error))
+        return retry
+
+    def worker(k, server):
+        step, queue = steps[k], queues[k]
+        failures_in_a_row = 0
+        try:
+            with db.connect() as db_conn:
+                while True:
+                    try:
+                        item = queue.get(timeout=1)
+                    except Empty:
+                        # Stop once preparations are over and no other worker can still hand an item back
+                        if no_work_left(k):
+                            return
+                        continue
+                    i, content, wav_path, tried = item
+                    with lock:
+                        others = alive[k] > 1
+                    if server in tried and others:
+                        # Already failed on this server: leave it to another one
+                        queue.put(item)
+                        queue.task_done()
+                        time.sleep(1)
+                        continue
+                    try:
+                        log(f"{log_prefix(i)} [{server}] {step.verb} {wav_path}...")
+                        result = step.run(db_conn, server, content, wav_path)
+                        report.done[names[k]].append(content)
+                        failures_in_a_row = 0
+                        log(f"{log_prefix(i)} Done! -> {result}")
+                    except requests.exceptions.ConnectionError as e:
+                        # The server is down or crashed (maybe because of this content)
+                        retried = retry_or_fail(k, item, server, e, dropped=True)
+                        log(
+                            f"{log_prefix(i)} Server {server} is unreachable"
+                            + (", the content goes back to the queue" if retried else ", the content failed (second time)")
+                            + f": waiting up to {SERVER_RETURN_TIMEOUT_S} s for the server to come back.\n{e}"
+                        )
+                        if not wait_for_server(k, server):
+                            if not no_work_left(k):
+                                log(f"Server {server} did not come back: its worker stops.")
+                            return
+                        log(f"Server {server} is back.")
+                    except Exception as e:
+                        retried = retry_or_fail(k, item, server, e, dropped=False)
+                        failures_in_a_row += 1
+                        log(
+                            f"{log_prefix(i)} {step.name.capitalize()} of '{wav_path}' failed on {server}"
+                            + (" (another server will try)" if retried else "")
+                            + f":\n{e}"
+                        )
+                        if failures_in_a_row >= MAX_CONSECUTIVE_FAILURES:
+                            log(f"Server {server} failed {failures_in_a_row} contents in a row: its worker stops.")
+                            return
+                    finally:
+                        # After the hand-back put(): the count never drops to 0 while the item is pending
+                        queue.task_done()
+        finally:
+            with lock:
+                alive[k] -= 1
 
     # Daemon threads: Ctrl+C stops the script at once instead of waiting for the work in progress
     workers = [
-        threading.Thread(target=worker, args=(step, server), daemon=True)
-        for step in steps
+        threading.Thread(target=worker, args=(k, server), daemon=True)
+        for k, step in enumerate(steps)
         for server in step.servers
     ]
     for w in workers:
@@ -163,30 +243,33 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
         with db.connect() as db_conn:
             for i, content in enumerate(contents, 1):
                 try:
-                    pending = [step for step in steps if not step.is_done(db_conn, content)]
-                    if steps and not pending:
+                    pending = [k for k, step in enumerate(steps) if not step.is_done(db_conn, content)]
+                    audio_missing = not steps and (
+                        db.get_existing_content_file(db_conn, content.id, "16k_mono_wav") is None
+                    )
+                    if not pending and not audio_missing:
                         log(f"{log_prefix(i)} Already done: {content.url}")
                         report.already_done += 1
                         continue
                     wav_path = prepare_wav(db_conn, content)
-                    if not steps:
+                    if not pending:
                         log(f"{log_prefix(i)} Audio ready: {wav_path}")
-                    for step in pending:
-                        queues[step.name].put((i, content, wav_path))
+                    for k in pending:
+                        queues[k].put((i, content, wav_path, frozenset()))  # (..., servers that failed it)
                 except Exception as e:
-                    log(f"{log_prefix(i)} Failed to prepare the wav of '{content.url}':\n{e}")
                     report.failed_preparations.append((content, e))
+                    log(f"{log_prefix(i)} Failed to prepare the wav of '{content.url}':\n{e}")
     finally:
         preparation_done.set()
 
     for w in workers:
         w.join()
 
-    # Items handed back by a worker whose server became unreachable, with no worker left to take them
-    for step in steps:
+    # Items left when every worker of their step stopped (servers unreachable or broken)
+    for k in range(len(steps)):
         while True:
             try:
-                report.not_run[step.name].append(queues[step.name].get_nowait()[1])
+                report.not_run[names[k]].append(queues[k].get_nowait()[1])
             except Empty:
                 break
 
@@ -199,17 +282,18 @@ def print_report(report: Report) -> None:
         print("Failed wav preparations:")
         for content, e in report.failed_preparations:
             print(f"  {content.url} : {e}")
+    plural = lambda name: name if "#" in name else f"{name}s"  # noqa: E731
     for name, failed in report.failed.items():
         if failed:
-            print(f"Failed {name}s:")
+            print(f"Failed {plural(name)}:")
             for content, e in failed:
                 print(f"  {content.url} : {e}")
     for name, not_run in report.not_run.items():
         if not_run:
-            print(f"No {name}, every server of the step became unreachable (re-run to retry):")
+            print(f"No {name}, no server of the step was left (re-run to retry):")
             for content in not_run:
                 print(f"  {content.url}")
-    done = ", ".join(f"{len(contents)} {name}s" for name, contents in report.done.items())
+    done = ", ".join(f"{len(contents)} {plural(name)}" for name, contents in report.done.items())
     print(
         f"Summary: {report.contents} contents, {report.already_done} already done"
         + (f", done now: {done}" if done else "")

@@ -25,6 +25,8 @@ args = parser.parse_args()
 if not DB_PATH.is_file():
     sys.exit(f"No database at {DB_PATH}")
 db_conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30)
+# casefold(text): lower case that also folds accented letters (LIKE only ignores the case of A-Z)
+db_conn.create_function("casefold", 1, lambda t: t.casefold() if isinstance(t, str) else t, deterministic=True)
 
 if args.schema:
     for (sql,) in db_conn.execute(
