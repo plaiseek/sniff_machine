@@ -1,6 +1,7 @@
 """Run a job: select contents (listings such as channels, and/or single URLs, optionally by upload
-date), then download, transcribe and/or diarize them. Job scripts (jobs/*.py, copied from
-jobs/job_template.py) only hold settings and call run_job().
+date), then download, transcribe and/or diarize them, and/or compute the voice embeddings of their
+diarized turns. Job scripts (jobs/*.py, copied from jobs/job_template.py) only hold settings and
+call run_job().
 
 Exit codes: 0 everything done, 1 some contents failed (re-run the job to retry them),
 2 invalid settings, 3 the same job is already running, 4 a server needed by a step is down.
@@ -14,7 +15,7 @@ from pathlib import Path
 import helpers.database as db
 import servers
 
-STEPS = ("download", "transcribe", "diarize")
+STEPS = ("download", "transcribe", "diarize", "embed")
 
 
 def _check_settings(listing_urls, content_urls, uploaded_from, uploaded_to, steps, language, diarization_params) -> list[str]:
@@ -76,7 +77,7 @@ def _lock(job_path: Path):
 def print_contents(db_conn, contents: list[db.Content], diarization_params: dict | None = None) -> None:
     """One line per content: what is already stored for it."""
     params = db.params_key(diarization_params)
-    print(f"{'id':>6}  {'uploaded':10}  {'duration':>8}  {'audio':5}  {'transcript':10}  {'diarization':18}  title")
+    print(f"{'id':>6}  {'uploaded':10}  {'duration':>8}  {'audio':5}  {'transcript':10}  {'diarization':18}  {'voices':6}  title")
     for c in contents:
         audio = "yes" if db.get_existing_content_file(db_conn, c.id, "16k_mono_wav") else "no"
         transcript = "yes" if db.get_existing_content_file(db_conn, c.id, "whisper_result") else "no"
@@ -89,9 +90,17 @@ def print_contents(db_conn, contents: list[db.Content], diarization_params: dict
             "SELECT 1 FROM diarizations WHERE content_id = ? AND params = ?", (c.id, params)
         ).fetchone()
         diarization = f"{row[0]} spk, {row[1]} turns" if has_run else "no"
+        # Voice embeddings (of any model) of every exclusive turn of every diarization of the content
+        unembedded = db_conn.execute(
+            """SELECT COUNT(*) FROM turns t JOIN diarizations d ON d.id = t.diarization_id WHERE d.content_id = ?
+AND t.exclusive = 1 AND NOT EXISTS (SELECT 1 FROM turn_embeddings e WHERE e.turn_id = t.id)""",
+            (c.id,),
+        ).fetchone()[0]
+        any_run = db_conn.execute("SELECT 1 FROM diarizations WHERE content_id = ?", (c.id,)).fetchone()
+        voices = "-" if not any_run else "no" if unembedded else "yes"
         duration = "?" if c.duration_s is None else str(datetime.timedelta(seconds=round(c.duration_s)))
         print(
-            f"{c.id:>6}  {(c.upload_date or '?')[:10]:10}  {duration:>8}  {audio:5}  {transcript:10}  {diarization:18}  {(c.title or '')[:60]}"
+            f"{c.id:>6}  {(c.upload_date or '?')[:10]:10}  {duration:>8}  {audio:5}  {transcript:10}  {diarization:18}  {voices:6}  {(c.title or '')[:60]}"
         )
 
 
@@ -108,7 +117,7 @@ EXIT_CODES = {
 def run_job(*args, **kwargs) -> int:
     """_run_job(), ending with a line that gives the exit code (the log of a job run in the
     background then says how it ended), even when it crashes or is interrupted.
-    `python jobs/<job>.py --status` only says whether the job is running."""
+    `python3.11 jobs/<job>.py --status` only says whether the job is running."""
     if "--status" in sys.argv[1:]:
         job_path = Path(args[0] if args else kwargs["job_path"]).resolve()
         print(f"{job_path.name}: " + ("NOT RUNNING" if _lock(job_path) else "RUNNING"))
@@ -142,7 +151,7 @@ def _run_job(
     diarization_params: dict | None = None,
     dry_run: bool = False,
 ) -> int:
-    from helpers.pipeline import diarization_step, print_stuck, run_steps, transcription_step
+    from helpers.pipeline import diarization_step, embedding_step, print_stuck, run_steps, transcription_step
     from helpers.yt_dlp import get_ytdlp_content, list_contents
 
     diarization_params = {} if diarization_params is None else diarization_params
@@ -160,12 +169,15 @@ def _run_job(
 
     # Fail fast, before any download, if a server needed by a step is down
     gpu_steps = []
+    embedding = None
     if not dry_run:
         try:
             if "transcribe" in steps:
                 gpu_steps.append(transcription_step(servers.WHISPER_SERVERS, language))
             if "diarize" in steps:
                 gpu_steps.append(diarization_step(servers.PYANNOTE_SERVERS, diarization_params))
+            if "embed" in steps:
+                embedding = embedding_step(servers.SPEECHBRAIN_SERVERS)
         except SystemExit as e:  # the client's server check failed
             print(f"{e.code}\nNothing done: a server needed by the steps is not ready (see check_servers.py).")
             return 4
@@ -209,10 +221,26 @@ def _run_job(
 
     # With GPU steps, the audio is only fetched for the contents that still need one: audio deleted
     # from cache/ to free disk space does not come back (STEPS = ["download"] alone fetches it)
-    report = run_steps(contents, gpu_steps)
+    reports = []
+    if gpu_steps or "download" in steps:
+        reports.append(run_steps(contents, gpu_steps))
+    if embedding is not None:
+        # After the diarization, which the embeddings need; contents never diarized are left out
+        # (run_steps would download their audio for nothing)
+        with db.connect() as db_conn:
+            diarized = [c for c in contents if db_conn.execute("SELECT 1 FROM diarizations WHERE content_id = ?", (c.id,)).fetchone()]
+        print(
+            f"Voice embeddings of the turns of {len(diarized)} diarized contents"
+            + (f" ({len(contents) - len(diarized)} not diarized, left out)" if len(diarized) < len(contents) else "")
+            + ":"
+        )
+        reports.append(run_steps(diarized, [embedding]))
     with db.connect() as db_conn:
         print_contents(db_conn, contents, diarization_params)
     if skipped:
         print(f"{len(skipped)} listing entries or URLs were skipped ({n_errors} errors), see above.")
-    print_stuck(report)  # again, next to the final line that the agent reads
-    return 5 if report.stuck else 1 if report.failures() or n_errors else 0
+    for report in reports:
+        print_stuck(report)  # again, next to the final line that the agent reads
+    if any(report.stuck for report in reports):
+        return 5
+    return 1 if any(report.failures() for report in reports) or n_errors else 0

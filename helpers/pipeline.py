@@ -112,6 +112,23 @@ def diarization_step(pyannote_servers: list[str], params: dict | None = None) ->
     return Step("diarization", "Diarizing", pyannote_servers, is_done, run)
 
 
+def embedding_step(speechbrain_servers: list[str]) -> Step:
+    """Voice embeddings of the exclusive turns of every diarization of a content. The steps of one
+    run_steps() call run side by side: run this one in a later call than the diarization (a content
+    not diarized yet has nothing to embed, so it counts as done)."""
+    from helpers.speechbrain_client import assert_speechbrain_servers, embed_content_turns
+
+    model = assert_speechbrain_servers(speechbrain_servers)
+
+    def is_done(db_conn, content):
+        return not db.get_unembedded_turns(db_conn, content.id, model)
+
+    def run(db_conn, server, content, wav_path):
+        return embed_content_turns(db_conn, server, content, wav_path, model)
+
+    return Step("embedding", "Embedding the turns of", speechbrain_servers, is_done, run)
+
+
 def prepare_wav(db_conn: sqlite3.Connection, content: db.Content) -> Path:
     """The 16 kHz mono wav of a content, rebuilt (re-downloading its audio if needed) when it is
     not registered or no longer on disk. The mp3 is only needed to build the wav."""

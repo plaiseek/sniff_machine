@@ -108,6 +108,44 @@ SELECT path, content_id, file_type, NULL FROM files WHERE content_id IN (SELECT 
     PRIMARY KEY (turn_id, model)
 )""",
     ],
+    # v4: named speakers, the reference ranges of their voice (enrollment, kept across
+    # re-diarizations and model changes), and who each diarization label is. Deleting a speaker
+    # deletes everything derived from their voice (cascades).
+    [
+        """CREATE TABLE speakers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+)""",
+        """CREATE TABLE speaker_samples (               -- a range of a content where only this speaker talks
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    speaker_id INTEGER NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
+    content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (speaker_id, content_id, start_ms, end_ms)
+)""",
+        """CREATE TABLE sample_embeddings (             -- like turn_embeddings: one per sample and model
+    sample_id INTEGER NOT NULL REFERENCES speaker_samples(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    embedding BLOB,                            -- L2-normalised float32, NULL = too short
+    PRIMARY KEY (sample_id, model)
+)""",
+        """CREATE TABLE speaker_labels (                -- who a label of a diarization is
+    diarization_id INTEGER NOT NULL REFERENCES diarizations(id) ON DELETE CASCADE,
+    speaker TEXT NOT NULL,                     -- the diarization label, e.g. 'SPEAKER_01'
+    speaker_id INTEGER REFERENCES speakers(id) ON DELETE CASCADE,  -- NULL = nobody known
+    source TEXT NOT NULL CHECK (source IN ('human', 'auto')),      -- 'auto' never replaces 'human'
+    model TEXT,                                -- 'auto': the embedding model compared
+    similarity REAL,                           -- 'auto': cosine similarity to the best speaker
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (diarization_id, speaker)
+)""",
+        "CREATE INDEX speaker_samples_by_content ON speaker_samples(content_id)",
+        "CREATE INDEX speaker_labels_by_speaker ON speaker_labels(speaker_id)",
+    ],
 ]
 
 # The columns migration v2 copies when it rebuilds contents and files
@@ -524,15 +562,173 @@ def get_turns(
     return [Turn(*row) for row in db_conn.execute(query + " ORDER BY start_ms, id", args)]
 
 
-def delete_diarization(db_conn: sqlite3.Connection, diarization_id: int) -> None:
-    """Delete a diarization run: its turns and their embeddings go with it (ON DELETE CASCADE),
-    and so does the registration of its raw result file (the file itself is kept)."""
+def delete_diarization(db_conn: sqlite3.Connection, diarization_id: int, force: bool = False) -> None:
+    """Delete a diarization run: its turns, their embeddings and its speaker labels go with it
+    (ON DELETE CASCADE), and so does the registration of its raw result file (the file itself is
+    kept). Labels set by a human cannot be recomputed: without force, they make it fail."""
+    if not force and db_conn.execute(
+        "SELECT 1 FROM speaker_labels WHERE diarization_id = ? AND source = 'human'", (diarization_id,)
+    ).fetchone():
+        raise ValueError(
+            f"Diarization {diarization_id} has speaker labels set by a human: pass force=True to delete them too"
+        )
     with db_conn:
         db_conn.execute(
             "DELETE FROM files WHERE file_type = 'pyannote_result' AND variant = ? AND content_id = (SELECT content_id FROM diarizations WHERE id = ?)",
             (str(diarization_id), diarization_id),
         )
         db_conn.execute("DELETE FROM diarizations WHERE id = ?", (diarization_id,))
+
+
+def serialize_embedding(embedding: list[float] | None) -> bytes | None:
+    return None if embedding is None else sqlite_vec.serialize_float32(embedding)
+
+
+def get_unembedded_turns(db_conn: sqlite3.Connection, content_id: int, model: str) -> list[Turn]:
+    """Exclusive turns of every diarization of a content that have no embedding row for `model`
+    (a turn too short to embed has a row with a NULL embedding), by start time."""
+    return [
+        Turn(*row)
+        for row in db_conn.execute(
+            """SELECT t.id, t.diarization_id, t.speaker, t.start_ms, t.end_ms, t.exclusive, t.overlap_ms
+FROM turns t JOIN diarizations d ON d.id = t.diarization_id
+WHERE d.content_id = ? AND t.exclusive = 1
+AND NOT EXISTS (SELECT 1 FROM turn_embeddings e WHERE e.turn_id = t.id AND e.model = ?)
+ORDER BY t.start_ms, t.id""",
+            (content_id, model),
+        )
+    ]
+
+
+def add_turn_embeddings(
+    db_conn: sqlite3.Connection, model: str, embeddings: list[tuple[int, list[float] | None]]
+) -> int:
+    """Store (turn id, embedding or None when the turn is too short) pairs in one transaction.
+    Embeddings already stored (e.g. by another script meanwhile) are kept. Returns how many rows
+    were added."""
+    with db_conn:
+        cursor = db_conn.executemany(
+            "INSERT OR IGNORE INTO turn_embeddings (turn_id, model, embedding) VALUES (?, ?, ?)",
+            [(turn_id, model, serialize_embedding(embedding)) for turn_id, embedding in embeddings],
+        )
+    return cursor.rowcount
+
+
+def get_turn_embeddings(
+    db_conn: sqlite3.Connection, diarization_id: int, model: str
+) -> list[tuple[Turn, bytes | None]]:
+    """The exclusive turns of a diarization with their `model` embedding (None when not computed or
+    too short), by start time."""
+    return [
+        (Turn(*row[:7]), row[7])
+        for row in db_conn.execute(
+            """SELECT t.id, t.diarization_id, t.speaker, t.start_ms, t.end_ms, t.exclusive, t.overlap_ms, e.embedding
+FROM turns t LEFT JOIN turn_embeddings e ON e.turn_id = t.id AND e.model = ?
+WHERE t.diarization_id = ? AND t.exclusive = 1 ORDER BY t.start_ms, t.id""",
+            (model, diarization_id),
+        )
+    ]
+
+
+def get_turn_embedding_models(db_conn: sqlite3.Connection) -> list[str]:
+    return [row[0] for row in db_conn.execute("SELECT DISTINCT model FROM turn_embeddings ORDER BY model")]
+
+
+def get_speaker_id(db_conn: sqlite3.Connection, name: str) -> int | None:
+    for row in db_conn.execute("SELECT id FROM speakers WHERE name = ?", (name,)):
+        return row[0]
+    return None
+
+
+def add_speaker(db_conn: sqlite3.Connection, name: str) -> int:
+    """The id of the speaker with this exact name, created if needed."""
+    with db_conn:
+        db_conn.execute("INSERT INTO speakers (name) VALUES (?) ON CONFLICT (name) DO NOTHING", (name,))
+    return get_speaker_id(db_conn, name)
+
+
+def delete_speaker(db_conn: sqlite3.Connection, name: str) -> bool:
+    """Forget a speaker: their samples, sample embeddings and every label naming them go too
+    (ON DELETE CASCADE). Returns False if there was no speaker with this name."""
+    with db_conn:
+        return db_conn.execute("DELETE FROM speakers WHERE name = ?", (name,)).rowcount > 0
+
+
+def add_speaker_samples(
+    db_conn: sqlite3.Connection,
+    speaker_id: int,
+    content_id: int,
+    model: str,
+    samples: list[tuple[int, int, list[float] | None]],
+) -> int:
+    """Store reference ranges of a speaker's voice, (start_ms, end_ms, embedding or None when too
+    short), with their `model` embeddings, in one transaction. A range already stored keeps its
+    embedding. Returns how many ranges were new."""
+    added = 0
+    with db_conn:
+        for start_ms, end_ms, embedding in samples:
+            added += db_conn.execute(
+                "INSERT INTO speaker_samples (speaker_id, content_id, start_ms, end_ms) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                (speaker_id, content_id, start_ms, end_ms),
+            ).rowcount
+            db_conn.execute(
+                """INSERT OR IGNORE INTO sample_embeddings (sample_id, model, embedding)
+SELECT id, ?, ? FROM speaker_samples WHERE speaker_id = ? AND content_id = ? AND start_ms = ? AND end_ms = ?""",
+                (model, serialize_embedding(embedding), speaker_id, content_id, start_ms, end_ms),
+            )
+    return added
+
+
+def get_speaker_samples(
+    db_conn: sqlite3.Connection, model: str
+) -> list[tuple[int, str, int, int, int, bytes]]:
+    """(speaker id, name, content id, start_ms, end_ms, embedding) of every sample with a `model`
+    embedding."""
+    return db_conn.execute(
+        """SELECT s.id, s.name, p.content_id, p.start_ms, p.end_ms, e.embedding
+FROM speakers s JOIN speaker_samples p ON p.speaker_id = s.id
+JOIN sample_embeddings e ON e.sample_id = p.id AND e.model = ?
+WHERE e.embedding IS NOT NULL ORDER BY s.id, p.content_id, p.start_ms""",
+        (model,),
+    ).fetchall()
+
+
+def set_speaker_label(
+    db_conn: sqlite3.Connection,
+    diarization_id: int,
+    speaker: str,
+    speaker_id: int | None,
+    source: str,
+    model: str | None = None,
+    similarity: float | None = None,
+) -> bool:
+    """Say who a label of a diarization is (speaker_id None: nobody known). A 'human' label replaces
+    any other; an 'auto' one only replaces an 'auto' one, never a human's. Returns whether it was
+    written."""
+    query = """INSERT INTO speaker_labels (diarization_id, speaker, speaker_id, source, model, similarity)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (diarization_id, speaker) DO UPDATE SET speaker_id = excluded.speaker_id,
+source = excluded.source, model = excluded.model, similarity = excluded.similarity,
+updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"""
+    if source == "auto":
+        query += " WHERE speaker_labels.source = 'auto'"
+    elif source != "human":
+        raise ValueError(f"source must be 'human' or 'auto', got {source!r}")
+    with db_conn:
+        cursor = db_conn.execute(query, (diarization_id, speaker, speaker_id, source, model, similarity))
+    return cursor.rowcount > 0
+
+
+def get_speaker_labels(db_conn: sqlite3.Connection, diarization_id: int) -> dict[str, tuple]:
+    """{label: (speaker id or None, name or None, source, similarity)} for a diarization."""
+    return {
+        row[0]: row[1:]
+        for row in db_conn.execute(
+            """SELECT l.speaker, l.speaker_id, s.name, l.source, l.similarity
+FROM speaker_labels l LEFT JOIN speakers s ON s.id = l.speaker_id WHERE l.diarization_id = ?""",
+            (diarization_id,),
+        )
+    }
 
 
 def write_atomic(path: pathlib.Path, text: str) -> None:

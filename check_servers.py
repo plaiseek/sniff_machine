@@ -1,7 +1,7 @@
 """Check the model servers listed in servers.py.
 
-    python check_servers.py                     # every server
-    python check_servers.py whisper pyannote    # only these kinds (or steps: transcribe, diarize)
+    python3.11 check_servers.py                     # every server
+    python3.11 check_servers.py whisper pyannote    # only these kinds (or steps: transcribe, diarize)
 
 Prints one line per server: OK, BUSY (its only worker is busy, or the model is still loading:
 work sent to it waits), LOADING or DOWN. Exits with 1 if a server of the requested kinds is DOWN.

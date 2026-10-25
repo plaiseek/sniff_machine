@@ -1,7 +1,7 @@
 """Run one read-only SQL query on the database and print the result as a table.
 
-    python .claude/skills/query-database/query.py "SELECT id, title FROM contents WHERE uploader LIKE ?" "%name%"
-    python .claude/skills/query-database/query.py --schema
+    python3.11 .claude/skills/query-database/query.py "SELECT id, title FROM contents WHERE uploader LIKE ?" "%name%"
+    python3.11 .claude/skills/query-database/query.py --schema
 
 The database is opened read-only: a query that would change it fails with
 "attempt to write a readonly database". At most --limit rows are printed (default 100).

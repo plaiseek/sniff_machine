@@ -16,7 +16,7 @@ Fill in every row before writing any file:
 | `LISTING_URLS` | channel / playlist / show URLs, written as in the URL table below |
 | `CONTENT_URLS` | single video URLs given in the request (`watch?v=...`, `twitch.tv/videos/...`) |
 | `UPLOADED_FROM`, `UPLOADED_TO` | `"YYYY-MM-DD"`, both inclusive, or `None` when the request gives no bound |
-| `STEPS` | `"download"` for fetch / download / get (télécharger, récupérer), `"transcribe"` for transcribe / transcript / text (transcrire), `"diarize"` for diarize / speakers / who speaks when (diariser, qui parle) |
+| `STEPS` | `"download"` for fetch / download / get (télécharger, récupérer), `"transcribe"` for transcribe / transcript / text (transcrire), `"diarize"` for diarize / speakers / who speaks when (diariser, qui parle), `"embed"` for voice embeddings / identify the speakers later (empreintes vocales): it needs `"diarize"` too, unless the contents are diarized already |
 | `LANGUAGE` | `"fr"`, unless the request says the videos are in another language (`"en"`, ..., or `"auto"`) |
 | `DIARIZATION_PARAMS` | `{}`, unless the request gives the number of speakers: `{"num_speakers": 2}` or `{"min_speakers": 2, "max_speakers": 5}` |
 
@@ -45,21 +45,21 @@ For a relative period, do not compute the dates yourself: run the script below a
 
 | The request says | Command |
 |---|---|
-| last week (la semaine dernière: the previous Monday to Sunday) | `python .claude/skills/pipeline-job/dates.py last-week` |
-| this week (cette semaine) | `python .claude/skills/pipeline-job/dates.py this-week` |
-| last month (le mois dernier) / this month (ce mois-ci) | `python .claude/skills/pipeline-job/dates.py last-month` / `... this-month` |
-| the last 30 days (les 30 derniers jours), today included | `python .claude/skills/pipeline-job/dates.py last-30-days` |
-| yesterday (hier) / today (aujourd'hui) | `python .claude/skills/pipeline-job/dates.py yesterday` / `... today` |
-| a whole month or year | `python .claude/skills/pipeline-job/dates.py 2026-03` / `... 2025` |
+| last week (la semaine dernière: the previous Monday to Sunday) | `python3.11 .claude/skills/pipeline-job/dates.py last-week` |
+| this week (cette semaine) | `python3.11 .claude/skills/pipeline-job/dates.py this-week` |
+| last month (le mois dernier) / this month (ce mois-ci) | `python3.11 .claude/skills/pipeline-job/dates.py last-month` / `... this-month` |
+| the last 30 days (les 30 derniers jours), today included | `python3.11 .claude/skills/pipeline-job/dates.py last-30-days` |
+| yesterday (hier) / today (aujourd'hui) | `python3.11 .claude/skills/pipeline-job/dates.py yesterday` / `... today` |
+| a whole month or year | `python3.11 .claude/skills/pipeline-job/dates.py 2026-03` / `... 2025` |
 
-**Stop and ask the user** when: you cannot tell which channel or URL is meant; a date is ambiguous (e.g. `03/04/2026`); the request asks for something these steps do not do (e.g. naming the speakers); the request asks to transcribe again contents already transcribed (e.g. in another language): a job never redoes a transcription, whatever `LANGUAGE` says. (Diarizing again with other `DIARIZATION_PARAMS` is supported: each set of params is a separate diarization.)
+**Stop and ask the user** when: you cannot tell which channel or URL is meant; a date is ambiguous (e.g. `03/04/2026`); the request asks for something these steps do not do (naming the speakers is the `speaker-identity` skill, after a job with `"diarize"` and `"embed"`); the request asks to transcribe again contents already transcribed (e.g. in another language): a job never redoes a transcription, whatever `LANGUAGE` says. (Diarizing again with other `DIARIZATION_PARAMS` is supported: each set of params is a separate diarization.)
 
 ## 2. Check the servers
 
 Skip this step when `STEPS` is only `["download"]`. Otherwise run, with only the steps you need:
 
 ```bash
-python check_servers.py transcribe diarize
+python3.11 check_servers.py transcribe diarize embed
 ```
 
 Every line must say `OK`, `BUSY` or `LOADING`. If a line says `DOWN`, stop and tell the user which address is down: the servers run on the GPU machines (see the `model-servers` skill). Do not edit `servers.py` unless the user gives you new addresses.
@@ -88,7 +88,7 @@ DRY_RUN = True
 ## 4. Dry run
 
 ```bash
-python jobs/<file>.py
+python3.11 jobs/<file>.py
 ```
 
 It prints the name of each listing (e.g. `Sniff Demo - Videos: 19 entries to check`), one line per selected content (id, upload date, duration, what is already done), `N contents selected`, the entries it skipped and why, and ends with `Job finished with exit code N`. Check that the listing is the channel the user meant and that every date is inside the bounds. The first listing of a channel fetches the details of each of its videos (about 1 to 3 s each, cached afterwards): it can take minutes.
@@ -102,13 +102,13 @@ It prints the name of each listing (e.g. `Sniff Demo - Videos: 19 entries to che
 
 ## 5. Real run
 
-Set `DRY_RUN = False` in the job file. Check that it is not already running: `python jobs/<file>.py --status` must print `NOT RUNNING` (if it prints `RUNNING`, do not start it again: go to the checks below). Then run it in the background, appending to its log (`>>`: a log is never overwritten), because it can take hours (transcription and diarization each take minutes per hour of audio):
+Set `DRY_RUN = False` in the job file. Check that it is not already running: `python3.11 jobs/<file>.py --status` must print `NOT RUNNING` (if it prints `RUNNING`, do not start it again: go to the checks below). Then run it in the background, appending to its log (`>>`: a log is never overwritten), because it can take hours (transcription and diarization each take minutes per hour of audio):
 
 ```bash
-nohup python jobs/<file>.py >> jobs/<file>.log 2>&1 &
+nohup python3.11 jobs/<file>.py >> jobs/<file>.log 2>&1 &
 ```
 
-(In Claude Code you can instead run `python jobs/<file>.py >> jobs/<file>.log 2>&1` with `run_in_background`.) Check the progress every few minutes with `tail -n 20 jobs/<file>.log`. The job is finished when the last line of the log starts with `Job finished with exit code` and `python jobs/<file>.py --status` prints `NOT RUNNING`. A `Job finished with exit code 3` line means a second copy was started while the job was running: that copy stopped at once, the first one goes on, keep waiting. If the final line does not come and `python jobs/<file>.py --status` prints `NOT RUNNING`, the job was killed (e.g. out of memory or a reboot): run it again, it resumes. Do not run two jobs on the same contents at the same time.
+(In Claude Code you can instead run `python3.11 jobs/<file>.py >> jobs/<file>.log 2>&1` with `run_in_background`.) Check the progress every few minutes with `tail -n 20 jobs/<file>.log`. The job is finished when the last line of the log starts with `Job finished with exit code` and `python3.11 jobs/<file>.py --status` prints `NOT RUNNING`. A `Job finished with exit code 3` line means a second copy was started while the job was running: that copy stopped at once, the first one goes on, keep waiting. If the final line does not come and `python3.11 jobs/<file>.py --status` prints `NOT RUNNING`, the job was killed (e.g. out of memory or a reboot): run it again, it resumes. Do not run two jobs on the same contents at the same time.
 
 ## 6. Check and report
 

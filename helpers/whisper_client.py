@@ -127,28 +127,32 @@ def dtw_to_srt_timestamp(dtw: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
 
-def whisper_result_to_srt(whisper_result_path: Path, srt_path: Path):
+def whisper_result_to_words(whisper_result_path: Path) -> list[tuple[str, int, int]]:
+    """The words of a transcription in order, as (text, start_ms, end_ms) on the timeline of the
+    audio sent (the server returns one word per segment: max_len=1). The one source of word times:
+    the SRT export and the speaker tools use it."""
     with open(whisper_result_path, "r", encoding="utf-8") as f:
         whisper_result = json.load(f)
 
+    # VAD removes parts of the audio and Whisper.cpp correct the segment start/end but not the word ones
+    words_with_dtw = []
+    for segment in whisper_result["segments"]:
+        if len(segment["text"]) == 0:
+            continue
+        words = segment.get("words") or []
+        if len(words) > 0 and words[0]["t_dtw"] >= 0 and words[-1]["t_dtw"] >= 0:
+            dtw_start = words[0]["t_dtw"] + round(100 * (segment["start"] - words[0]["start"]))
+            dtw_end = words[-1]["t_dtw"] + round(100 * (segment["end"] - words[-1]["end"]))
+        else:
+            # No word or no DTW timestamp (t_dtw = -1): use the segment times
+            dtw_start, dtw_end = round(100 * segment["start"]), round(100 * segment["end"])
+        words_with_dtw.append((segment["text"], 10 * dtw_start, 10 * dtw_end))  # DTW unit: 10 ms
+    return words_with_dtw
+
+
+def whisper_result_to_srt(whisper_result_path: Path, srt_path: Path):
+    words = whisper_result_to_words(whisper_result_path)
     os.makedirs(srt_path.parent, exist_ok=True)
     with open(srt_path, "w", encoding="utf-8") as f:
-        # VAD removes parts of the audio and Whisper.cpp correct the segment start/end but not the word ones
-        words_with_dtw = []
-        for segment in whisper_result["segments"]:
-            if len(segment["text"]) == 0:
-                continue
-            words = segment.get("words") or []
-            if len(words) > 0 and words[0]["t_dtw"] >= 0 and words[-1]["t_dtw"] >= 0:
-                dtw_start = words[0]["t_dtw"] + round(100 * (segment["start"] - words[0]["start"]))
-                dtw_end = words[-1]["t_dtw"] + round(100 * (segment["end"] - words[-1]["end"]))
-            else:
-                # No word or no DTW timestamp (t_dtw = -1): use the segment times
-                dtw_start, dtw_end = round(100 * segment["start"]), round(100 * segment["end"])
-            words_with_dtw.append((segment["text"], dtw_start, dtw_end))
-
-        for i, word_with_dtw in enumerate(words_with_dtw, 1):
-            word, word_dtw_start, word_dtw_end = word_with_dtw
-            f.write(
-                f"{i}\n{dtw_to_srt_timestamp(word_dtw_start)} --> {dtw_to_srt_timestamp(word_dtw_end)}\n{word}\n\n"
-            )
+        for i, (word, start_ms, end_ms) in enumerate(words, 1):
+            f.write(f"{i}\n{dtw_to_srt_timestamp(start_ms // 10)} --> {dtw_to_srt_timestamp(end_ms // 10)}\n{word}\n\n")

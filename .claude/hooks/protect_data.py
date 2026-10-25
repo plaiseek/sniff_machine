@@ -6,7 +6,8 @@ shows the message to the agent. It catches the usual mistakes, not every possibl
 - copying or redirecting something over the database (cp, install, ln, dd of=, > and >>);
 - `git clean` with -x/-X (it deletes ignored files, cache/ included);
 - any sqlite3 command-line use of the database without -readonly (the CLI has no foreign keys,
-  hence no cascades, and SQL can come from arguments, stdin, heredocs or .restore).
+  hence no cascades, and SQL can come from arguments, stdin, heredocs or .restore);
+- forgetting a speaker (enroll_speaker.py --forget): it deletes samples and labels a human entered.
 Commands are split with a shell tokenizer, so quoted text (e.g. `grep "rm cache/test.db"`) and
 heredoc bodies are not taken for commands.
 """
@@ -113,6 +114,9 @@ def blocked_segment(words: list, cwd: str) -> tuple[bool, str]:
         return names_db and "-readonly" not in rest, cwd
     if name == "git" and "clean" in rest:
         return any(re.match(r"^-[a-zA-Z]*[xX]", a) for a in rest), cwd
+    script = name if name.endswith(".py") else os.path.basename(paths[0]) if re.match(r"^python[\d.]*$", name) and paths else ""
+    if script == "enroll_speaker.py":
+        return "--forget" in rest, cwd
     return False, cwd
 
 

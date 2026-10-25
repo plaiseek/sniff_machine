@@ -1,8 +1,8 @@
 """Print the UPLOADED_FROM / UPLOADED_TO settings lines of a job for a period.
 
-    python .claude/skills/pipeline-job/dates.py last-week
-    python .claude/skills/pipeline-job/dates.py 2026-03        # a whole month
-    python .claude/skills/pipeline-job/dates.py 2026           # a whole year
+    python3.11 .claude/skills/pipeline-job/dates.py last-week
+    python3.11 .claude/skills/pipeline-job/dates.py 2026-03        # a whole month
+    python3.11 .claude/skills/pipeline-job/dates.py 2026           # a whole year
 
 Periods (relative to today in this machine's time zone): today, yesterday, this-week, last-week
 (the previous Monday to Sunday), this-month, last-month, this-year, last-year, last-N-days (e.g.
@@ -48,7 +48,7 @@ def period(name: str, today: datetime.date) -> tuple[datetime.date, datetime.dat
 
 
 if len(sys.argv) != 2:
-    sys.exit(f"usage: python {sys.argv[0]} PERIOD, PERIOD being one of: {PERIODS}")
+    sys.exit(f"usage: python3.11 {sys.argv[0]} PERIOD, PERIOD being one of: {PERIODS}")
 today = datetime.date.today()  # local date: at 00:30 in Paris, UTC is still yesterday
 try:
     first, last = period(sys.argv[1].lower(), today)

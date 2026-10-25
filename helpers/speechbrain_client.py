@@ -3,22 +3,50 @@ from pathlib import Path
 import json
 import requests
 import sys
+import time
 
+import helpers.database as db
 from helpers.uploads import post_wav
 
 
-def assert_speechbrain_servers(addresses: list):
+def assert_speechbrain_servers(addresses: list, busy_timeout_s: float = 600) -> str:
+    """Exit if a server is down. Returns the model the servers run (they must all run the same):
+    it is part of what makes a turn "embedded", so it is never guessed. A server only answers
+    /health between two requests (it has one thread): busy servers are waited for (up to
+    busy_timeout_s) until one answers."""
+    if not addresses:
+        sys.exit("No SpeechBrain server is listed in servers.py (SPEECHBRAIN_SERVERS)")
+    models, busy = set(), []
     for address in addresses:
         url = f"http://{address}/health"
         print(f"Checking {url}...")
         try:
             r = requests.get(url, timeout=5)
             r.raise_for_status()
+            models.add(r.json()["model"])
         except requests.exceptions.ReadTimeout:
-            # The server's only worker is busy (or still loading the model): requests will wait for it
-            print(f"SpeechBrain server {address} is busy or still loading.")
-        except requests.exceptions.RequestException as e:
+            busy.append(address)  # its only thread is embedding (or the model is still loading)
+        except (requests.exceptions.RequestException, ValueError, KeyError) as e:
             sys.exit(f"SpeechBrain server {address} is not ready: {e}")
+    deadline = time.monotonic() + busy_timeout_s
+    while not models and busy:
+        if time.monotonic() > deadline:
+            sys.exit(f"No SpeechBrain server answered /health within {busy_timeout_s:.0f} s (busy: {busy})")
+        print(f"SpeechBrain servers {busy} are busy or loading: waiting for one to answer...", flush=True)
+        time.sleep(10)
+        for address in busy:
+            try:
+                r = requests.get(f"http://{address}/health", timeout=5)
+                r.raise_for_status()
+                models.add(r.json()["model"])
+                break
+            except requests.exceptions.ReadTimeout:
+                pass
+            except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+                sys.exit(f"SpeechBrain server {address} is not ready: {e}")
+    if len(models) > 1:
+        sys.exit(f"The SpeechBrain servers run different models: {sorted(models)}")
+    return models.pop()
 
 
 def wav_to_speechbrain_embeddings(
@@ -71,3 +99,28 @@ def diarization_to_speechbrain_embeddings(
             for (start, end, speaker), embedding in zip(turns, result["embeddings"])
         ],
     }
+
+
+def embed_content_turns(
+    db_conn, speechbrain_address: str, content: db.Content, wav_path: Path, model: str
+) -> str:
+    """Embed the exclusive turns of the content's diarizations that have no `model` embedding yet,
+    in one request (the wav is uploaded once), and store them in one transaction, with None for the
+    turns too short to embed so that they are not sent again. `model` is what
+    assert_speechbrain_servers() returned. Returns a short summary."""
+    turns = db.get_unembedded_turns(db_conn, content.id, model)
+    if not turns:
+        return "nothing left to embed (embedded meanwhile by another script)"
+    # Diarizations of one content with other params share most of their turns: each range is sent once
+    ranges = list(dict.fromkeys((turn.start_ms, turn.end_ms) for turn in turns))
+    result = wav_to_speechbrain_embeddings(
+        speechbrain_address, wav_path, [[start / 1000, end / 1000] for start, end in ranges]
+    )
+    if result["model"] != model:
+        raise ValueError(f"Server {speechbrain_address} runs {result['model']}, not {model}")
+    if len(result["embeddings"]) != len(ranges):
+        raise ValueError(f"Server {speechbrain_address} returned {len(result['embeddings'])} embeddings for {len(ranges)} turns")
+    by_range = dict(zip(ranges, result["embeddings"]))
+    db.add_turn_embeddings(db_conn, model, [(turn.id, by_range[turn.start_ms, turn.end_ms]) for turn in turns])
+    too_short = sum(by_range[turn.start_ms, turn.end_ms] is None for turn in turns)
+    return f"{len(turns) - too_short} turns embedded, {too_short} too short to embed"

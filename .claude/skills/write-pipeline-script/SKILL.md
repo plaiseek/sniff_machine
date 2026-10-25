@@ -24,7 +24,7 @@ First check whether the `pipeline-job` skill covers the request: selecting listi
 import helpers.database as db          # the database: always go through these functions
 import servers                         # server address lists: servers.WHISPER_SERVERS, PYANNOTE_SERVERS, ...
 from helpers.yt_dlp import list_contents, get_ytdlp_content
-from helpers.pipeline import prepare_wav, run_steps, transcription_step, diarization_step, Step
+from helpers.pipeline import prepare_wav, run_steps, transcription_step, diarization_step, embedding_step, Step
 ```
 
 | Function | What it does |
@@ -37,6 +37,10 @@ from helpers.pipeline import prepare_wav, run_steps, transcription_step, diariza
 | `prepare_wav(db_conn, content)` | the content's 16 kHz mono wav, downloading the audio if needed |
 | `run_steps(contents, [transcription_step(servers.WHISPER_SERVERS, "fr"), diarization_step(servers.PYANNOTE_SERVERS, {"num_speakers": 2})])` | download, then transcribe / diarize on every server in parallel, skipping what is done; returns a report: `sys.exit(report.exit_code())` |
 | `db.get_diarization_id(db_conn, content.id, model, params)`, `db.get_turns(db_conn, diarization_id, exclusive=True)` | a stored diarization and its turns (`speaker`, `start_ms`, `end_ms`, `overlap_ms`) |
+| `run_steps(diarized_contents, [embedding_step(servers.SPEECHBRAIN_SERVERS)])` | voice embeddings of the exclusive turns, in a later `run_steps` call than the diarization (the steps of one call run side by side) |
+| `db.get_speaker_labels(db_conn, diarization_id)` | `{label: (speaker_id, name, source, similarity)}`: who the labels are |
+| `import helpers.speakers as sp`: `sp.label_voices(db_conn, diarization_id, model)`, `sp.speaker_voices(db_conn, model)`, `sp.best_match(voice, speakers)`, `sp.is_clean(turn)` | voice vectors of the labels and of the named speakers, the closest speaker; never write labels yourself, `identify_speakers.py` does |
+| `from helpers.whisper_client import whisper_result_to_words` | the words of a `whisper_result` file as `(text, start_ms, end_ms)`, on the same timeline as the turns |
 | `db.add_content_file(db_conn, path, content.id, file_type, variant="")`, `db.write_atomic(path, text)` | register a file you produced; write it without ever leaving a half-written file |
 
 `db.Content` fields: `id, platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series`. The read-only SQL of the `query-database` skill shows the tables.
@@ -45,7 +49,7 @@ A new step sent to a model server is a `Step(name, verb, servers, is_done, run)`
 
 ## Example: speaking time per speaker of a channel's diarized videos, as CSV
 
-Saved as `jobs/<today>_speaking_time.py` and run with `python jobs/<today>_speaking_time.py`:
+Saved as `jobs/<today>_speaking_time.py` and run with `python3.11 jobs/<today>_speaking_time.py`:
 
 ```python
 import csv, os, sys
@@ -85,6 +89,6 @@ print(f"Wrote {OUTPUT} ({len(contents)} contents of '{UPLOADER}')")
 
 ## Test before the real run
 
-1. `python -m py_compile <script>.py` must print nothing.
+1. `python3.11 -m py_compile <script>.py` must print nothing.
 2. Run it on one content first (e.g. `db.find_contents(db_conn, ids=[<one id>])`), check its output and the database with the `query-database` skill.
-3. Then run it on everything, in the background with a log if it takes more than a few minutes: `nohup python <script>.py >> <script>.log 2>&1 &`.
+3. Then run it on everything, in the background with a log if it takes more than a few minutes: `nohup python3.11 <script>.py >> <script>.log 2>&1 &`.

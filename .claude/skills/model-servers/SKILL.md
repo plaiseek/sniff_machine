@@ -9,16 +9,16 @@ The servers are Docker containers built and run by the `run_*_servers.py` script
 
 | Kind | Used by the step | Start script | Default port(s) | Address list in `servers.py` |
 |---|---|---|---|---|
-| whisper | transcribe | `python run_whisper_servers.py` | 8070, 8071 | `WHISPER_SERVERS` |
-| pyannote | diarize | `python run_pyannote_servers.py` | 8050 | `PYANNOTE_SERVERS` |
-| speechbrain | embed (voice embeddings) | `python run_speechbrain_servers.py` | 8040 | `SPEECHBRAIN_SERVERS` |
-| wtpsplit | split (sentences) | `python run_wtpsplit_servers.py` | 8060 | `WTPSPLIT_SERVERS` |
+| whisper | transcribe | `python3.11 run_whisper_servers.py` | 8070, 8071 | `WHISPER_SERVERS` |
+| pyannote | diarize | `python3.11 run_pyannote_servers.py` | 8050 | `PYANNOTE_SERVERS` |
+| speechbrain | embed (voice embeddings) | `python3.11 run_speechbrain_servers.py` | 8040 | `SPEECHBRAIN_SERVERS` |
+| wtpsplit | split (sentences) | `python3.11 run_wtpsplit_servers.py` | 8060 | `WTPSPLIT_SERVERS` |
 
 ## Check
 
 ```bash
-python check_servers.py                 # every server in servers.py
-python check_servers.py transcribe      # only those a step needs: transcribe, diarize, embed, split
+python3.11 check_servers.py                 # every server in servers.py
+python3.11 check_servers.py transcribe      # only those a step needs: transcribe, diarize, embed, split
 ```
 
 `OK`: ready. `BUSY`: working on a request (or still loading); work sent to it waits, which is fine. `LOADING`: Whisper is loading another model; a job started now waits for it (up to 10 minutes). `DOWN`: not reachable, or still starting (a starting Whisper server opens its port only once its model is loaded). Exit code 1 when a server is DOWN.
@@ -29,10 +29,10 @@ python check_servers.py transcribe      # only those a step needs: transcribe, d
 2. If it is `127.0.0.1` and the user asked you to start it: check that Docker answers (`docker ps`). If it does not, stop and tell the user to start Docker.
 3. If the script of that kind is already running (`ps -ef | grep "[r]un_pyannote_servers"` prints a line, with your kind's script name), the servers are starting: go to step 4. Otherwise start them in the background, with a log:
    ```bash
-   nohup python run_pyannote_servers.py > cache/pyannote_servers.log 2>&1 &
+   nohup python3.11 run_pyannote_servers.py > cache/pyannote_servers.log 2>&1 &
    ```
    The first start builds the Docker image: from 10 minutes to more than an hour. Pyannote also needs the `hf.token` file at the repository root (a Hugging Face token whose account accepted the conditions of `pyannote/speaker-diarization-community-1`); if it is missing, stop and tell the user.
-4. Run `python check_servers.py <kind>` every minute until it says `OK` (the model loads after the build). Stop and show the user the last 30 lines of the log if the log shows `Traceback`, `ERROR` or `Failed to build`, if the script is gone (`ps -ef | grep "[r]un_pyannote_servers"` prints nothing, with your kind's script name), or after 90 minutes.
+4. Run `python3.11 check_servers.py <kind>` every minute until it says `OK` (the model loads after the build). Stop and show the user the last 30 lines of the log if the log shows `Traceback`, `ERROR` or `Failed to build`, if the script is gone (`ps -ef | grep "[r]un_pyannote_servers"` prints nothing, with your kind's script name), or after 90 minutes.
 
 ## Rules
 
@@ -40,7 +40,7 @@ python check_servers.py transcribe      # only those a step needs: transcribe, d
 - A server can be stuck and still say OK or BUSY (e.g. a GPU hang): a job then ends with exit code 5 and a line saying it `is probably stuck` (no answer within a day). Tell the user which server; restarting it is their decision.
 - Stop servers only when the user asks. A `run_*_servers.py` started in a terminal stops its containers on Ctrl+C. One started in the background ignores Ctrl+C signals: stop its containers with the matching function, then kill the script:
   ```bash
-  python -c "from helpers.pyannote_amd_server import stop_all_pyannote_containers as stop; stop()"
+  python3.11 -c "from helpers.pyannote_amd_server import stop_all_pyannote_containers as stop; stop()"
   kill <pid of run_pyannote_servers.py>
   ```
   (`stop_all_whisper_containers` in `helpers.whisper_amd_server`, `stop_all_speechbrain_containers` in `helpers.speechbrain_amd_server`, `stop_all_wtpsplit_containers` in `helpers.wtpsplit_amd_server`.)

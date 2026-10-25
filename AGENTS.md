@@ -22,6 +22,7 @@ Before doing one of these tasks, read the matching `SKILL.md` and follow it step
 |---|---|
 | download, transcribe or diarize the videos of a channel, a playlist, a date range or a list of URLs | `.claude/skills/pipeline-job/SKILL.md` |
 | answer a question about what the database contains (videos, transcriptions, speakers, turns) | `.claude/skills/query-database/SKILL.md` |
+| find out who the speakers are: voice embeddings, listening to a label, naming it, identifying it in other videos | `.claude/skills/speaker-identity/SKILL.md` |
 | check, start or stop the model servers, change their addresses | `.claude/skills/model-servers/SKILL.md` |
 | anything else that needs a new script (custom selection, new step, export) | `.claude/skills/write-pipeline-script/SKILL.md` |
 
@@ -29,6 +30,7 @@ Before doing one of these tasks, read the matching `SKILL.md` and follow it step
 
 - Run every command from the repository root.
 - Never delete, move or overwrite `cache/`, `cache/test.db` or `cache/backups/`: they cannot be recomputed. Never change the database by hand (no `DELETE`, `UPDATE`, `DROP`): read it with `.claude/skills/query-database/query.py`. In Claude Code, `.claude/hooks/protect_data.py` blocks the usual ways of doing it. Restoring a backup (`restore_backup.py`) is for the user to do.
+- Never name a speaker yourself (from a title, a channel name or a transcript): only the user says who a diarization label is (`enroll_speaker.py`), and automatic names are reported as guesses with their similarity. `enroll_speaker.py --forget` is for the user to run.
 - Never run a `run_*_servers.py` script while `check_servers.py` says its servers are OK or BUSY: it restarts them and kills the work in progress.
 - Long commands (jobs, server builds) run in the background with a log file; check the log instead of waiting.
 - Do not commit `cache/`, `hf.token` or job logs.

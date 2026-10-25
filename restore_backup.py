@@ -1,7 +1,7 @@
 """Restore cache/test.db from one of its backups (cache/backups/*.db).
 
-    python restore_backup.py                                # list the backups
-    python restore_backup.py cache/backups/<backup>.db
+    python3.11 restore_backup.py                                # list the backups
+    python3.11 restore_backup.py cache/backups/<backup>.db
 
 Stop every script, job and datasette first. The backup must exist, pass an integrity check and
 hold a contents table; the current database is saved in cache/backups/ before being replaced, so
@@ -38,7 +38,7 @@ if len(sys.argv) != 2:
 source = pathlib.Path(sys.argv[1])
 if not source.is_file():
     # sqlite3.connect() would create an empty database there, and restoring it would empty test.db
-    sys.exit(f"No backup at {source}: run `python restore_backup.py` to list them.")
+    sys.exit(f"No backup at {source}: run `python3.11 restore_backup.py` to list them.")
 backup = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
 try:
     problems = backup.execute("PRAGMA integrity_check").fetchall()

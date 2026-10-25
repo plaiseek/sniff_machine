@@ -1,7 +1,7 @@
 """Job: <write the request here, e.g. "fetch, transcribe and diarize the videos of @name uploaded in March 2026">
 
 Copied from jobs/job_template.py: only the settings below were edited. Run it from the repository
-root with `python jobs/<this file>.py` (`--status` only says whether it is running). Re-running it
+root with `python3.11 jobs/<this file>.py` (`--status` only says whether it is running). Re-running it
 resumes: what is already in the database is skipped. Exit codes: 0 done, 1 some contents failed
 (re-run to retry them), 2 invalid settings, 3 already running, 4 a server is not ready, 5 a server
 is probably stuck (it needs a restart).
@@ -21,9 +21,11 @@ CONTENT_URLS = []
 UPLOADED_FROM = None
 UPLOADED_TO = None
 
-# What to do: "download" (audio), "transcribe" (whisper), "diarize" (pyannote: who speaks when).
-# The audio is always downloaded when another step needs it. ["download"] alone also fetches again
-# the audio deleted from cache/ of contents already transcribed or diarized.
+# What to do: "download" (audio), "transcribe" (whisper), "diarize" (pyannote: who speaks when),
+# "embed" (speechbrain: voice embeddings of the diarized turns, run after "diarize", which
+# identify_speakers.py needs). The audio is always downloaded when another step needs it.
+# ["download"] alone also fetches again the audio deleted from cache/ of contents already
+# transcribed or diarized.
 STEPS = ["download", "transcribe", "diarize"]
 
 # Transcription language: a 2-letter code ("fr", "en", ...) or "auto"
