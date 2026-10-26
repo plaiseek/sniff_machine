@@ -95,14 +95,14 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
    python3.11 admin/create_sqlite_db.py
    ```
 
-2. **Start the model servers** you need. In each `model_servers/run_*_servers.py`, adjust `gpu_instances` (a `{device_id: [ports]}` mapping) and the build parameters (`gfx_version` for Whisper, `sat_model` for wtpsplit) to your hardware, then:
+2. **Start the model servers** you need. Copy [local_servers.example.yaml](local_servers.example.yaml) to `local_servers.yaml` (git-ignored: one per machine), keep the kinds this machine runs, and set their GPUs and ports (`gpus: {<ROCm device>: [<ports>]}`) and build options (`gfx_version` for Whisper, `sat_model` for wtpsplit) to its hardware. Without the file, the launchers use the example's values. Then:
    ```bash
    python3.11 model_servers/run_whisper_servers.py    # transcription
    python3.11 model_servers/run_pyannote_servers.py   # speaker diarization
    python3.11 model_servers/run_wtpsplit_servers.py   # sentence segmentation
    python3.11 model_servers/run_speechbrain_servers.py # voice embeddings
    ```
-   Each script builds the Docker image if needed, starts the containers, and streams their logs until you hit Ctrl+C.
+   Each script builds the Docker image if needed, starts the containers, and streams their logs until you hit Ctrl+C (or `kill <pid>`: it removes its containers). A kind without a section in `local_servers.yaml` refuses to start on that machine.
 
 3. **Set the server addresses** in [servers.py](servers.py) (one `host:port` per container), and check them:
    ```bash
@@ -134,6 +134,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
 6. **Name the speakers** (after `pipeline/embed_speaker_turns.py` or a job with `"embed"`):
    ```bash
+   python3.11 speakers/group_voices.py --uploader Psyhodelik          # the voices heard in several contents, before anyone is named
    python3.11 speakers/listen_speaker.py 243                          # the labels of content 243: minutes, clean minutes, who they are
    python3.11 speakers/listen_speaker.py 243 SPEAKER_01               # a clip of the label's longest clean turns + what is said + links
    python3.11 speakers/enroll_speaker.py "Name" 243 --label SPEAKER_01  # this label is Name (or START END ranges instead of --label)

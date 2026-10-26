@@ -1,5 +1,5 @@
-# Addresses (host:port) of the model servers that the scripts and jobs send work to.
-# Edit them to match where you run model_servers/run_*_servers.py (gpu_instances = {device: [ports]}).
+# Addresses (host:port) of the model servers that the scripts and jobs send work to, on every machine.
+# Edit them to match where you run model_servers/run_*_servers.py (each machine's local_servers.yaml).
 # Each server gets one worker thread (a vLLM server several): list a server once per container.
 # The servers that do not answer when a step starts are left out (their machine may be off).
 

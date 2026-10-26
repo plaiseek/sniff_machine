@@ -5,6 +5,7 @@ requests>=2.34
 urllib3>=2.7  # comes with requests; helpers/uploads.py imports it for TCP keepalive
 numpy>=2.4
 sqlite-vec>=0.1.9
+pyyaml>=5.4  # local_servers.yaml, read by model_servers/run_*_servers.py
 yt-dlp>=2026.10.21  # update it often: the platforms change
 yt-dlp-ejs>=0.8  # lets yt-dlp solve YouTube's JavaScript challenges (with deno, see the README)
 matplotlib>=3.11  # plot_word_counts.py only

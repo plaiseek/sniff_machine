@@ -9,11 +9,12 @@ Sniff Machine downloads videos and audios (YouTube, Twitch, French TV and radio,
 | `jobs/job_template.py` | template of a job: select contents (channel, URLs, upload dates), then download / transcribe / diarize them |
 | `jobs/*.py` | jobs created from the template (one per request) |
 | `pipeline/` | steps on what is in the database: `transcript_pending_audios.py`, `diarize_contents.py`, `store_words.py`, `split_sentences.py`, `embed_speaker_turns.py` |
-| `speakers/` | who the speakers are: `listen_speaker.py`, `enroll_speaker.py`, `identify_speakers.py`, `evaluate_speakers.py` |
+| `speakers/` | who the speakers are: `group_voices.py`, `listen_speaker.py`, `enroll_speaker.py`, `identify_speakers.py`, `evaluate_speakers.py` |
 | `explore/` | read and search the transcriptions, ask an LLM: `show_transcript.py`, `search_transcripts.py`, `ask_transcripts.py`, `plot_word_counts.py` |
 | `model_servers/` | start and check the model servers: `run_*_servers.py`, `check_servers.py` |
 | `admin/` | the database file itself: `create_sqlite_db.py`, `restore_backup.py` (for the user only) |
-| `servers.py` | addresses of the model servers; `model_servers/check_servers.py` checks them; a step uses those that answer |
+| `servers.py` | addresses of the model servers of every machine; `model_servers/check_servers.py` checks them; a step uses those that answer |
+| `local_servers.yaml` | which model servers this machine runs, on which GPUs and ports (git-ignored, one per machine; template `local_servers.example.yaml`) |
 | `helpers/` | shared code: `database.py` (`connect()`, and every query re-exported: `import helpers.database as db`), `migrations.py` (the schema), `tables/` (the queries, by group of tables), `pipeline.py` (steps run on the servers), `jobs.py`, `yt_dlp.py`, one client and one server module per model |
 | `cache/` | the database and every downloaded or computed file |
 | `criteria/` | criteria files for `explore/ask_transcripts.py --criteria` (e.g. hateful speech under French law) |
@@ -44,6 +45,7 @@ Before doing one of these tasks, read the matching `SKILL.md` and follow it step
 - Never delete, move or overwrite `cache/`, `cache/test.db` or `cache/backups/`: they cannot be recomputed. Never change the database by hand (no `DELETE`, `UPDATE`, `DROP`): read it with `.claude/skills/query-database/query.py`. In Claude Code, `.claude/hooks/protect_data.py` blocks the usual ways of doing it. Restoring a backup (`admin/restore_backup.py`) is for the user to do.
 - Never name a speaker yourself (from a title, a channel name or a transcript): only the user says who a diarization label is (`speakers/enroll_speaker.py`), and automatic names are reported as guesses with their similarity. `speakers/enroll_speaker.py --forget` is for the user to run.
 - Never run a `model_servers/run_*_servers.py` script while `model_servers/check_servers.py` says a server of its kind on this machine is OK, BUSY or LOADING: it restarts them and kills the work in progress.
+- Stop the model servers you started once the batch they were started for is done (`model-servers` skill); never stop the others without asking.
 - Long commands (jobs, server builds) run in the background with a log file (`python3.11 -u`, so that the log is written as it goes); check the log instead of waiting.
 - After changing `helpers/`, run `python3.11 -m unittest discover tests`: every test must pass.
-- Do not commit `cache/`, `exports/`, `hf.token` or job logs.
+- Do not commit `cache/`, `exports/`, `local_servers.yaml`, `hf.token` or job logs.

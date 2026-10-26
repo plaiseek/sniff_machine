@@ -1,0 +1,31 @@
+# The model servers this machine runs, read by model_servers/run_<kind>_servers.py.
+# Copy this file to local_servers.yaml (git-ignored: one per machine) and keep only the kinds this
+# machine runs: a kind without a section is not started here. Without local_servers.yaml, each
+# launcher uses the defaults below. Then list each server's address in servers.py (shared by every
+# machine), e.g. "192.168.0.41:8070".
+#
+# gpus: {<ROCm device>: [<ports>]}: one server per port. The device is ROCm's index
+# (ROCR_VISIBLE_DEVICES), not the N of /sys/class/drm/cardN: the model-servers skill shows how to
+# find it. One server per GPU is enough for Pyannote and SpeechBrain: a second one on the same GPU
+# was no faster (2026-10-26). One Whisper large-v3 server needs about 4.3 GB of GPU memory.
+# The other keys are the options of helpers/<kind>_amd_server.py build_<kind>_image(). Put text in
+# quotes: unquoted, YAML reads 11.0 as a number.
+
+whisper:
+  gpus: {0: [8070, 8071]}
+  gfx_version: "11.0.0"   # the GPU's gfx target: gfx_target_version 110000 in /sys/class/kfd/kfd/topology/nodes/*/properties
+  # A machine with two gfx 12.0.1 GPUs, three servers each:
+  # gpus: {0: [8070, 8071, 8072], 1: [8073, 8074, 8075]}
+  # gfx_version: "12.0.1"
+
+pyannote:
+  gpus: {0: [8050]}
+  huggingface_token_path: "hf.token"   # its account must have accepted pyannote/speaker-diarization-community-1
+
+speechbrain:
+  gpus: {0: [8040]}
+  model: "speechbrain/spkrec-ecapa-voxceleb"
+
+wtpsplit:
+  gpus: {0: [8060]}
+  sat_model: "sat-12l-sm"   # every wtpsplit server must run the same model

@@ -44,7 +44,7 @@ Status: 0.2 is done another way: `connect()` backs the database up in `cache/bac
 
 - **whisper.cpp v1.9.5 answers HTTP 500** to `/inference` when its VAD finds no speech (container log: `Final speech segments after filtering: 0`, then `unknown language id -2`); a retry can return an empty transcription. Seen on content 465 (24 s, 3.9 s of speech by Pyannote). The client could treat it as an empty transcription, or the language detection could be skipped when `language` is given.
 - **One 16 GB GPU for every server is too small**: with 2 Whisper large-v3 + Pyannote + SpeechBrain + wtpsplit on the RX 7900 GRE, about 14.3 GiB are used at rest and SpeechBrain runs out of memory (`GPU out of memory: lower 'batch_size' or 'max_duration'`): content 167 has no voice embeddings yet. Run one Whisper on such a card, or cap the servers' PyTorch memory.
-- **Correcting speaker names**: no script records "this label is nobody I know" or a wrong name (the schema supports a human label with no speaker), and none finds an unnamed voice in other contents before it is named (`speakers/similar_labels.py CONTENT LABEL`, naming no one).
+- **Correcting speaker names**: no script records "this label is nobody I know" or a wrong name (the schema supports a human label with no speaker). Finding an unnamed voice in other contents is done: `speakers/group_voices.py` (2026-10-26) shows where it is heard, naming no one.
 - A live or upcoming `CONTENT_URLS` entry is an error (exit 1), while in a listing it is skipped without one.
 - A job's `--status` takes the job's lock for an instant: a job started at that instant stops with exit code 3.
 - Rebuilding the Whisper image left the old one (33 GB) dangling: `docker system df` shows about 18 GB reclaimable (the user's decision).

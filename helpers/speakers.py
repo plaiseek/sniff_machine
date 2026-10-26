@@ -82,6 +82,28 @@ def best_match(voice: Voice, speakers: dict[int, tuple[str, Voice]]) -> tuple[in
     return best
 
 
+def group_voices(voices: dict, threshold: float) -> list[tuple[Voice, list]]:
+    """Groups of voices that sound alike, e.g. the labels of different contents that are one person.
+    `voices`: {key: Voice}. Taken longest first, each voice joins the group whose first (longest)
+    voice is the closest when their similarity reaches `threshold`, or starts a group. That
+    similarity is the one speakers/identify_speakers.py computes once the first voice of the group
+    is enrolled with --label (its samples are that label's clean turns). Returns [(group voice,
+    [(key, voice, similarity to the first voice)])], the group with the most speech first; a group's
+    voice is the first one's vector, with the speech and turns of every member. Names no one."""
+    groups, leaders = [], []
+    for key, voice in sorted(voices.items(), key=lambda item: -item[1].seconds):
+        similarities = np.stack(leaders) @ voice.vector if leaders else np.zeros(0)
+        best = int(np.argmax(similarities)) if leaders else None
+        if best is not None and similarities[best] >= threshold:
+            group, members = groups[best]
+            members.append((key, voice, float(similarities[best])))
+            groups[best] = (Voice(group.vector, group.seconds + voice.seconds, group.turns + voice.turns), members)
+        else:
+            groups.append((voice, [(key, voice, 1.0)]))
+            leaders.append(voice.vector)
+    return sorted(groups, key=lambda group: -group[0].seconds)
+
+
 def describe_label(labels: dict, label: str) -> str:
     """Who a label is, from db.get_speaker_labels(): "Jean Dupont (human)", "Jean Dupont (auto, 0.92)",
     "unknown (auto, 0.41)", or "" when it was never identified."""
