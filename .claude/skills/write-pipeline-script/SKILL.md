@@ -54,6 +54,10 @@ from helpers.pipeline import prepare_wav, run_steps, transcription_step, diariza
 
 A new step sent to a model server is a `Step(name, verb, servers, is_done, run)`: `is_done(db_conn, content) -> bool` says whether its result is already stored; `run(db_conn, server, content, wav_path) -> str` computes it on one server, stores it, and returns a one-line summary. A step that needs no audio passes `needs_audio=False` (its `run` gets `wav_path=None`, and no audio is downloaded for it). A server that batches requests (vLLM) gets several worker threads with `workers=N` (`question_step` also sends a content's requests at once, through `helpers.vllm_client.Slots`). `run_steps` then handles the threads, the servers that go down and the failure report. Look at `transcription_step` in `helpers/pipeline.py` for a complete example.
 
+## Subtitles
+
+Subtitles are not part of the workflow: the Whisper large-v3 transcriptions are far better than automatic subtitles, and mixing subtitles into them would bias what is counted and searched. Only when a request asks for subtitles that people wrote (e.g. to compare with the transcription), use [manual_subtitles.py](manual_subtitles.py) as is or as the example to start from: it fetches only human-written subtitles (`get_ytdlp_content_srt(..., automatic_sub=False)`), stores them as `ytdlp_subtitles` files and never turns them into words or sentences. Never fetch automatic subtitles, and never store subtitles in `words`, `sentences` or `transcriptions`.
+
 ## Example: speaking time per speaker of a channel's diarized videos, as CSV
 
 Saved as `jobs/<today>_speaking_time.py` and run with `python3.11 jobs/<today>_speaking_time.py`:

@@ -114,8 +114,6 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
    - [store_words.py](store_words.py) stores the words of every transcription not stored yet, and aligns them to the diarizations made since (no server needed). The transcription and diarization scripts and the jobs do it too.
    - [split_sentences.py](split_sentences.py) cuts the stored words of each content into runs of one speaker, then into sentences with wtpsplit (`--punctuation`: after `. ? ! …`, no server).
    - [embed_speaker_turns.py](embed_speaker_turns.py) computes the voice embedding (SpeechBrain) of every exclusive turn of every diarization that has none yet for the server's model, one request per content. Turns shorter than 1 s get a `NULL` embedding, so that they are not sent again.
-   - [sniff_and_transcript_channel_audios.py](sniff_and_transcript_channel_audios.py) downloads and transcribes every video of a channel (a job without dates).
-   - [sniff_channel_subtitles.py](sniff_channel_subtitles.py) downloads a channel's existing subtitles.
 
 6. **Name the speakers** (after `embed_speaker_turns.py` or a job with `"embed"`):
    ```bash

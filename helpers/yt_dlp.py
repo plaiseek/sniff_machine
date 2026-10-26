@@ -215,17 +215,6 @@ def get_ytdlp_content_srt(
     return srt_path
 
 
-def ls_channel_videos(channel_url: str) -> list:
-    """URLs of every entry of a channel, playlist or show page."""
-    with yt_dlp.YoutubeDL(_LISTING_OPTIONS) as ydl:
-        return [
-            entry["url"]
-            for _, entries in _iter_listings(ydl, channel_url)
-            for entry in entries
-            if entry.get("url")
-        ]
-
-
 _LISTING_OPTIONS = {
     "quiet": True,
     "extract_flat": True,

@@ -52,7 +52,7 @@ For a relative period, do not compute the dates yourself: run the script below a
 | yesterday (hier) / today (aujourd'hui) | `python3.11 .claude/skills/pipeline-job/dates.py yesterday` / `... today` |
 | a whole month or year | `python3.11 .claude/skills/pipeline-job/dates.py 2026-03` / `... 2025` |
 
-**Stop and ask the user** when: you cannot tell which channel or URL is meant; a date is ambiguous (e.g. `03/04/2026`); the request asks for something these steps do not do (naming the speakers is the `speaker-identity` skill, after a job with `"diarize"` and `"embed"`); the request asks to transcribe again contents already transcribed (e.g. in another language): a job never redoes a transcription, whatever `LANGUAGE` says. (Diarizing again with other `DIARIZATION_PARAMS` is supported: each set of params is a separate diarization.)
+**Stop and ask the user** when: you cannot tell which channel or URL is meant; a date is ambiguous (e.g. `03/04/2026`); the request asks for something these steps do not do (naming the speakers is the `speaker-identity` skill, after a job with `"diarize"` and `"embed"`); the request asks for subtitles (not part of a job: only those written by people, see the `write-pipeline-script` skill); the request asks to transcribe again contents already transcribed (e.g. in another language): a job never redoes a transcription, whatever `LANGUAGE` says. (Diarizing again with other `DIARIZATION_PARAMS` is supported: each set of params is a separate diarization.)
 
 ## 2. Check the servers
 

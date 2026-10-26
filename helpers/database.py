@@ -399,11 +399,6 @@ def _migrate(db_conn: sqlite3.Connection) -> None:
         print(f"Migrated {db_path} from schema v{version} to v{len(MIGRATIONS)} (backup: {backup_path})")
 
 
-def create_tables(db_conn: sqlite3.Connection) -> None:
-    """Kept for older scripts: connect() already creates or migrates the schema."""
-    migrate(db_conn)
-
-
 def connect():
     """Connection to the database, created or migrated to the latest schema if needed."""
     os.makedirs(pathlib.Path(db_path).parent, exist_ok=True)
