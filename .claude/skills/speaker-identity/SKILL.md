@@ -61,4 +61,4 @@ python3.11 evaluate_speakers.py
 
 Once a speaker is labelled by the user in at least 2 contents, it shows, for several thresholds, how many labels would be named right or wrong. Suggest the threshold with no wrong names and the most right ones, and say how many cases it rests on. Run it again after a change of the SpeechBrain model or server image.
 
-To report who speaks in a video and for how long afterwards, use the `query-database` skill.
+To report who speaks in a video and for how long afterwards, use the `query-database` skill; to show what each speaker says, with the names, run `python3.11 show_transcript.py CONTENT_ID`.

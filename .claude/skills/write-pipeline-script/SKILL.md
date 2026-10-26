@@ -24,7 +24,7 @@ First check whether the `pipeline-job` skill covers the request: selecting listi
 import helpers.database as db          # the database: always go through these functions
 import servers                         # server address lists: servers.WHISPER_SERVERS, PYANNOTE_SERVERS, ...
 from helpers.yt_dlp import list_contents, get_ytdlp_content
-from helpers.pipeline import prepare_wav, run_steps, transcription_step, diarization_step, embedding_step, Step
+from helpers.pipeline import prepare_wav, run_steps, transcription_step, diarization_step, embedding_step, sentence_step, Step
 ```
 
 | Function | What it does |
@@ -40,12 +40,17 @@ from helpers.pipeline import prepare_wav, run_steps, transcription_step, diariza
 | `run_steps(diarized_contents, [embedding_step(servers.SPEECHBRAIN_SERVERS)])` | voice embeddings of the exclusive turns, in a later `run_steps` call than the diarization (the steps of one call run side by side) |
 | `db.get_speaker_labels(db_conn, diarization_id)` | `{label: (speaker_id, name, source, similarity)}`: who the labels are |
 | `import helpers.speakers as sp`: `sp.label_voices(db_conn, diarization_id, model)`, `sp.speaker_voices(db_conn, model)`, `sp.best_match(voice, speakers)`, `sp.is_clean(turn)` | voice vectors of the labels and of the named speakers, the closest speaker; never write labels yourself, `identify_speakers.py` does |
-| `from helpers.whisper_client import whisper_result_to_words` | the words of a `whisper_result` file as `(text, start_ms, end_ms)`, on the same timeline as the turns |
+| `db.get_words(db_conn, content.id)`, `db.get_words_with_speakers(db_conn, content.id)` | the stored words of a content in order (`idx`, `text`, `norm`, `start_ms`, `end_ms`, `prob`, `turn_id`), the second with the label of their turn (None: no turn) |
+| `db.get_sentences(db_conn, content.id)` | its stored sentences: `(first_idx, last_idx, start_ms, end_ms, speaker, text)` |
+| `from helpers.transcripts import update_transcripts` | `update_transcripts(db_conn, [content ids])` stores the words of the transcriptions not stored yet and aligns them to new diarizations (prints a line per content); jobs and the transcription / diarization scripts call it |
+| `run_steps(transcribed_contents, [sentence_step(servers.WTPSPLIT_SERVERS)])` | the sentences of the stored words (wtpsplit), never across two speakers; needs no audio. `helpers.transcripts.split_sentences(db_conn, content.id)` splits on punctuation without a server |
+| `from helpers.transcripts import speaker_runs, content_link, hms` | the words in runs of one speaker; a link to a moment of a content; ms as `H:MM:SS` |
+| `from helpers.whisper_client import whisper_result_to_words` | the words of a `whisper_result` file (`text`, `start_ms`, `end_ms`, `prob`), on the same timeline as the turns: the stored words come from it |
 | `db.add_content_file(db_conn, path, content.id, file_type, variant="")`, `db.write_atomic(path, text)` | register a file you produced; write it without ever leaving a half-written file |
 
 `db.Content` fields: `id, platform, external_id, url, title, duration_s, uploader, upload_date, channel_id, series`. The read-only SQL of the `query-database` skill shows the tables.
 
-A new step sent to a model server is a `Step(name, verb, servers, is_done, run)`: `is_done(db_conn, content) -> bool` says whether its result is already stored; `run(db_conn, server, content, wav_path) -> str` computes it on one server, stores it, and returns a one-line summary. `run_steps` then handles the threads, the servers that go down and the failure report. Look at `transcription_step` in `helpers/pipeline.py` for a complete example.
+A new step sent to a model server is a `Step(name, verb, servers, is_done, run)`: `is_done(db_conn, content) -> bool` says whether its result is already stored; `run(db_conn, server, content, wav_path) -> str` computes it on one server, stores it, and returns a one-line summary. A step that needs no audio passes `needs_audio=False` (its `run` gets `wav_path=None`, and no audio is downloaded for it). `run_steps` then handles the threads, the servers that go down and the failure report. Look at `transcription_step` in `helpers/pipeline.py` for a complete example.
 
 ## Example: speaking time per speaker of a channel's diarized videos, as CSV
 

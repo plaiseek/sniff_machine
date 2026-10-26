@@ -1,6 +1,6 @@
 ---
 name: pipeline-job
-description: Downloads, transcribes and/or diarizes (who speaks when) the videos or audios of a channel, playlist or show, or of single URLs, optionally only those uploaded between two dates, by copying jobs/job_template.py into a job script and running it. Use for requests like "fetch, transcribe and diarize all videos from channel X uploaded between Y and Z", "transcribe these videos", "diarize the March videos of X" (in French télécharger, transcrire, diariser les vidéos d'une chaîne), or to resume or check such a job.
+description: Downloads, transcribes and/or diarizes (who speaks when) the videos or audios of a channel, playlist or show, or of single URLs, optionally only those uploaded between two dates, and splits their transcriptions into sentences, by copying jobs/job_template.py into a job script and running it. Use for requests like "fetch, transcribe and diarize all videos from channel X uploaded between Y and Z", "transcribe these videos", "diarize the March videos of X" (in French télécharger, transcrire, diariser les vidéos d'une chaîne), or to resume or check such a job.
 ---
 
 # Pipeline job
@@ -16,7 +16,7 @@ Fill in every row before writing any file:
 | `LISTING_URLS` | channel / playlist / show URLs, written as in the URL table below |
 | `CONTENT_URLS` | single video URLs given in the request (`watch?v=...`, `twitch.tv/videos/...`) |
 | `UPLOADED_FROM`, `UPLOADED_TO` | `"YYYY-MM-DD"`, both inclusive, or `None` when the request gives no bound |
-| `STEPS` | `"download"` for fetch / download / get (télécharger, récupérer), `"transcribe"` for transcribe / transcript / text (transcrire), `"diarize"` for diarize / speakers / who speaks when (diariser, qui parle), `"embed"` for voice embeddings / identify the speakers later (empreintes vocales): it needs `"diarize"` too, unless the contents are diarized already |
+| `STEPS` | `"download"` for fetch / download / get (télécharger, récupérer), `"transcribe"` for transcribe / transcript / text (transcrire), `"diarize"` for diarize / speakers / who speaks when (diariser, qui parle), `"embed"` for voice embeddings / identify the speakers later (empreintes vocales): it needs `"diarize"` too, unless the contents are diarized already; `"split"` for sentences / search what was said / who said what (phrases, qui a dit quoi): it needs `"transcribe"` (and `"diarize"` for the speakers) too, unless done already. The words of the transcriptions are stored in the database by any job that transcribes or diarizes, without `"split"` |
 | `LANGUAGE` | `"fr"`, unless the request says the videos are in another language (`"en"`, ..., or `"auto"`) |
 | `DIARIZATION_PARAMS` | `{}`, unless the request gives the number of speakers: `{"num_speakers": 2}` or `{"min_speakers": 2, "max_speakers": 5}` |
 
@@ -59,7 +59,7 @@ For a relative period, do not compute the dates yourself: run the script below a
 Skip this step when `STEPS` is only `["download"]`. Otherwise run, with only the steps you need:
 
 ```bash
-python3.11 check_servers.py transcribe diarize embed
+python3.11 check_servers.py transcribe diarize embed split
 ```
 
 Every line must say `OK`, `BUSY` or `LOADING`. If a line says `DOWN`, stop and tell the user which address is down: the servers run on the GPU machines (see the `model-servers` skill). Do not edit `servers.py` unless the user gives you new addresses.
@@ -115,9 +115,10 @@ nohup python3.11 jobs/<file>.py >> jobs/<file>.log 2>&1 &
 Read the end of the log (`tail -n 40 jobs/<file>.log`). Its last line gives the exit code: 0 everything done; 1 some contents failed (or the job crashed: the error is just above); 2 invalid settings; 3 already running; 4 a server is not ready, nothing done: stop and tell the user which server (the lines above say it), do not edit `servers.py` or restart servers; 5 a server is probably stuck (the line above names it): tell the user it needs a restart, do not run the job again and do not restart it yourself; 130 interrupted: run it again.
 
 - If some contents failed (`Failed ...` lines, exit code 1), run the same job once more: it only redoes what is missing. If the same contents fail again, report them with their error lines; do not change any code.
-- Report to the user: the job file, the number of contents selected, how many are now downloaded / transcribed / diarized, the failures and skipped entries with their reasons.
+- Report to the user: the job file, the number of contents selected, how many are now downloaded / transcribed / diarized / split into sentences, the failures and skipped entries with their reasons.
+- A job that transcribes, diarizes or splits also stores the words of the transcriptions in the database (a `Words: ... failures.` line). A failure there (exit code 1) names the content and its error: report it, do not change any code.
 
-To answer questions about the results afterwards (speakers, turns, which videos are done), use the `query-database` skill. Running the job again with `DRY_RUN = True` also shows what is done for each content.
+To answer questions about the results afterwards (speakers, turns, what was said and by whom, which videos are done), use the `query-database` skill. Running the job again with `DRY_RUN = True` also shows what is done for each content.
 
 ## Rules
 

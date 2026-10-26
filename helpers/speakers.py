@@ -80,3 +80,14 @@ def best_match(voice: Voice, speakers: dict[int, tuple[str, Voice]]) -> tuple[in
         if best[2] is None or similarity > best[2]:
             best = (speaker_id, name, similarity)
     return best
+
+
+def describe_label(labels: dict, label: str) -> str:
+    """Who a label is, from db.get_speaker_labels(): "Jean Dupont (human)", "Jean Dupont (auto, 0.92)",
+    "unknown (auto, 0.41)", or "" when it was never identified."""
+    if label not in labels:
+        return ""
+    _, name, source, similarity = labels[label]
+    if source == "human":
+        return f"{name or 'nobody known'} (human)"
+    return f"{name or 'unknown'} (auto, {similarity:.2f})" if similarity is not None else f"{name or 'unknown'} (auto)"

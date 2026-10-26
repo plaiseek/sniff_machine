@@ -22,14 +22,7 @@ import sys
 import helpers.database as db
 import helpers.speakers as sp
 import servers
-
-
-def seconds(text: str) -> float:
-    """'75', '75.5', '1:15', '1:02:03.5' -> seconds."""
-    total = 0.0
-    for part in text.split(":"):
-        total = total * 60 + float(part)
-    return total
+from helpers.transcripts import parse_seconds as seconds
 
 
 def enroll_label(db_conn, speaker_name: str, content: db.Content, label: str, diarization_id: int | None, model: str | None) -> int:

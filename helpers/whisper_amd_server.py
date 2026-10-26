@@ -1,6 +1,13 @@
 import helpers.docker as dk
 
 
+# whisper.cpp release built into the image, and its commit (the build fails if the tag moved).
+# whisper_client.whisper_words() relies on its server mapping the segment times through the VAD but
+# not the token times (start, end, t_dtw), as v1.9.5 does: check it again before changing the pin
+WHISPER_CPP_TAG = "v1.9.5"
+WHISPER_CPP_COMMIT = "d1be6fde11ac6e0407606b4e42fe72d34add8037"
+
+
 def build_whisper_image(
     gfx_version="11.0.0", ggml_model="large-v3", vad_model="silero-v6.2.0"
 ) -> None:
@@ -10,7 +17,8 @@ FROM rocm/dev-ubuntu-22.04:6.3-complete
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git cmake make g++ python3 ca-certificates ffmpeg \\
     && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth=1 https://github.com/ggml-org/whisper.cpp /app
+RUN git clone --depth=1 --branch {WHISPER_CPP_TAG} https://github.com/ggml-org/whisper.cpp /app \\
+    && test "$(git -C /app rev-parse HEAD)" = "{WHISPER_CPP_COMMIT}"
 WORKDIR /app
 RUN cmake -S . -B build \\
     -DGGML_HIP=ON \\

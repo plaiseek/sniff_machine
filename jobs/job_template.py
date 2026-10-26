@@ -23,9 +23,11 @@ UPLOADED_TO = None
 
 # What to do: "download" (audio), "transcribe" (whisper), "diarize" (pyannote: who speaks when),
 # "embed" (speechbrain: voice embeddings of the diarized turns, run after "diarize", which
-# identify_speakers.py needs). The audio is always downloaded when another step needs it.
-# ["download"] alone also fetches again the audio deleted from cache/ of contents already
-# transcribed or diarized.
+# identify_speakers.py needs), "split" (wtpsplit: the transcription in sentences, each of one
+# speaker, run after "transcribe" and "diarize"; needs no audio). The words of the transcriptions
+# are stored in the database by any job that transcribes, diarizes or splits. The audio is always
+# downloaded when another step needs it. ["download"] alone also fetches again the audio deleted
+# from cache/ of contents already transcribed or diarized.
 STEPS = ["download", "transcribe", "diarize"]
 
 # Transcription language: a 2-letter code ("fr", "en", ...) or "auto"

@@ -12,6 +12,7 @@ A SQLite database (`cache/test.db`, see [helpers/database.py](helpers/database.p
 - **`files`**: files produced for each content (`ytdlp_info`, `ytdlp_audio`, `ytdlp_subtitles`, `16k_mono_wav`, `whisper_result`, ...), stored under `cache/`.
 - **`diarizations`**, **`turns`**, **`turn_embeddings`**: diarization runs of a content, their speaker turns, and one voice embedding per turn and model.
 - **`speakers`**, **`speaker_samples`** (+ **`sample_embeddings`**), **`speaker_labels`**: named people, reference ranges of their voice, and who each diarization label is (set by a person, or by `identify_speakers.py` with its similarity). Deleting a speaker deletes everything derived from their voice.
+- **`transcriptions`**, **`words`**, **`sentences`** (+ the full-text index **`sentences_fts`**): the words of each transcription (text, normalised form, time, probability) with the speaker turn each one falls in (the content's latest diarization), and their sentences, never across two speakers.
 
 All pipeline steps are idempotent: if a file is already registered in the database, it is not re-downloaded / re-computed.
 
@@ -93,7 +94,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
    ```bash
    python3.11 jobs/<name>.py
    ```
-   With `DRY_RUN = True` (the template's default) it only lists the selected contents and what is already done for them. With `DRY_RUN = False` it downloads their audio (mp3, then a 16 kHz mono wav), transcribes and/or diarizes them, and with `"embed"` in `STEPS` computes the voice embeddings of the diarized turns once the diarizations are done: each step is spread over all its servers in parallel while the next audios download. Every step is skipped when its result is already in the database, so re-running a job resumes it. The job ends with the list of failures (exit code 1) and one line per content showing what is stored for it.
+   With `DRY_RUN = True` (the template's default) it only lists the selected contents and what is already done for them. With `DRY_RUN = False` it downloads their audio (mp3, then a 16 kHz mono wav), transcribes and/or diarizes them (storing the words of the transcriptions in the database, each with its speaker turn), with `"embed"` in `STEPS` computes the voice embeddings of the diarized turns once the diarizations are done, and with `"split"` cuts the transcriptions into sentences: each step is spread over all its servers in parallel while the next audios download. Every step is skipped when its result is already in the database, so re-running a job resumes it. The job ends with the list of failures (exit code 1) and one line per content showing what is stored for it.
 
    For example, "fetch, transcribe and diarize the videos of @name uploaded in March 2026":
    ```python
@@ -107,6 +108,8 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
    - [transcript_pending_audios.py](transcript_pending_audios.py) transcribes every content with an audio file (`16k_mono_wav` or `ytdlp_audio`) and no `whisper_result`, e.g. after an interrupted job or failed transcriptions. Contents without audio (e.g. subtitles only) are left out.
    - [diarize_contents.py](diarize_contents.py) diarizes every content with an audio file and no diarization yet for the server's model and the script's `params` (e.g. `{"num_speakers": 2}`). Each run is stored as a `diarizations` row with all its `turns` (regular and exclusive, with the overlapped speech of each turn), and the server's raw answer is kept in `cache/pyannote_result/`.
+   - [store_words.py](store_words.py) stores the words of every transcription not stored yet, and aligns them to the diarizations made since (no server needed). The transcription and diarization scripts and the jobs do it too.
+   - [split_sentences.py](split_sentences.py) cuts the stored words of each content into runs of one speaker, then into sentences with wtpsplit (`--punctuation`: after `. ? ! …`, no server).
    - [embed_speaker_turns.py](embed_speaker_turns.py) computes the voice embedding (SpeechBrain) of every exclusive turn of every diarization that has none yet for the server's model, one request per content. Turns shorter than 1 s get a `NULL` embedding, so that they are not sent again.
    - [sniff_and_transcript_channel_audios.py](sniff_and_transcript_channel_audios.py) downloads and transcribes every video of a channel (a job without dates).
    - [sniff_channel_subtitles.py](sniff_channel_subtitles.py) downloads a channel's existing subtitles.
@@ -123,7 +126,15 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
    Voiceprints that identify named people are biometric data (GDPR art. 9): enroll public figures in their public role only, keep the database, the audio and `cache/speaker_clips/` private, and check automatic names before publishing anything built on them.
 
-7. **Explore the database**:
+7. **Read what was said, and by whom** (after `store_words.py`, or a job that transcribes):
+   ```bash
+   python3.11 show_transcript.py 243 --from 10:00 --to 15:00     # paragraphs per speaker, with times, links and names when known
+   python3.11 search_transcripts.py '"mairie de paris"'          # who said it, where (needs split_sentences.py); pete* = péter, pété...
+   python3.11 plot_word_counts.py Psyhodelik --speaker "Name" --output counts.png   # cumulated word counts (edit THEMES)
+   ```
+   The words have the times of Whisper's tokens, and the speaker of the exclusive turn their middle falls in (about 5 % fall between turns). `plot_word_counts.py` needs matplotlib (`python3.11 -m pip install matplotlib`; on Ubuntu, python3.11 may also need `pip install --user pillow`).
+
+8. **Explore the database**:
    ```bash
    python3.11 -m datasette cache/test.db --port 8001
    ```
@@ -135,7 +146,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 | Skill | For requests like |
 |---|---|
 | [pipeline-job](.claude/skills/pipeline-job/SKILL.md) | "fetch, transcribe and diarize all videos from channel X uploaded between Y and Z": writes a job from the template, dry-runs it, runs it in the background and reports |
-| [query-database](.claude/skills/query-database/SKILL.md) | "which videos of X are not diarized yet?", "how long does each speaker talk in video N?" (read-only SQL) |
+| [query-database](.claude/skills/query-database/SKILL.md) | "which videos of X are not diarized yet?", "how long does each speaker talk in video N?", "who said 'mairie de Paris'?", "how many times does X say Y?" (read-only SQL) |
 | [speaker-identity](.claude/skills/speaker-identity/SKILL.md) | "who is SPEAKER_01 in video 243?", "SPEAKER_00 of video 418 is Jean Dupont, find him in the other videos" (the agent never names anyone itself) |
 | [model-servers](.claude/skills/model-servers/SKILL.md) | checking, starting or stopping the model servers |
 | [write-pipeline-script](.claude/skills/write-pipeline-script/SKILL.md) | anything the job template cannot do: a custom selection, a new step, an export |
@@ -149,7 +160,6 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 See [PLAN.md](PLAN.md) for the full review and the phased improvement plan (bug fixes, DB migrations, SpeechBrain embedding server, speaker identification, new sources).
 
 1. Find a way to retrieve (or scrap) videos list of france.tv etc...
-2. Integrate the wtpsplit sentence segmentation into the sniffing pipeline
 
 ### Potential medias
 

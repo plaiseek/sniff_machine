@@ -9,6 +9,7 @@ The database is opened read-only: a query that would change it fails with
 
 import argparse
 import pathlib
+import re
 import sqlite3
 import sys
 
@@ -27,6 +28,8 @@ if not DB_PATH.is_file():
 db_conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=30)
 # casefold(text): lower case that also folds accented letters (LIKE only ignores the case of A-Z)
 db_conn.create_function("casefold", 1, lambda t: t.casefold() if isinstance(t, str) else t, deterministic=True)
+# text REGEXP pattern: Python's re.search (e.g. words.norm REGEXP '^pipis?$')
+db_conn.create_function("regexp", 2, lambda p, t: t is not None and re.search(p, t) is not None, deterministic=True)
 
 if args.schema:
     for (sql,) in db_conn.execute(

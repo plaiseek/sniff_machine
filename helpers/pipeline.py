@@ -6,8 +6,9 @@
     sys.exit(report.exit_code())
 
 The main thread prepares the 16 kHz mono wav of each content (downloading its audio if needed),
-while one worker thread per server runs a step on the wavs already prepared. Every step is
-idempotent: what is already in the database is skipped, so re-running a script resumes it.
+while one worker thread per server runs a step on the wavs already prepared (a step that needs no
+audio, such as the sentence split, gets none). Every step is idempotent: what is already in the
+database is skipped, so re-running a script resumes it.
 
 A content is tried at most twice per step: an error hands it to another server of the step, a
 dropped connection (the server crashed, e.g. out of memory on a long audio) hands it back while
@@ -56,7 +57,8 @@ class Step:
     verb: str  # e.g. "Transcribing"
     servers: list[str]
     is_done: Callable[[sqlite3.Connection, db.Content], bool]
-    run: Callable[[sqlite3.Connection, str, db.Content, Path], str]
+    run: Callable[[sqlite3.Connection, str, db.Content, Path | None], str]
+    needs_audio: bool = True  # False: run gets no wav (None), and none is prepared for this step
 
 
 @dataclass
@@ -93,6 +95,8 @@ def transcription_step(whisper_servers: list[str], language: str = "fr") -> Step
         result_path = Path(f"cache/whisper_result/{content.platform}_{content.external_id}.json")
         wav_to_whisper_result(server, wav_path, result_path, language)
         db.add_content_file(db_conn, result_path, content.id, "whisper_result")
+        # Words stored from a previous result are stale: helpers.transcripts.update_transcripts() stores the new ones
+        db.delete_transcription(db_conn, content.id)
         return str(result_path)
 
     return Step("transcription", "Transcribing", whisper_servers, is_done, run)
@@ -127,6 +131,24 @@ def embedding_step(speechbrain_servers: list[str]) -> Step:
         return embed_content_turns(db_conn, server, content, wav_path, model)
 
     return Step("embedding", "Embedding the turns of", speechbrain_servers, is_done, run)
+
+
+def sentence_step(wtpsplit_servers: list[str]) -> Step:
+    """The sentences of the stored words of a content (see helpers/transcripts.py), never across
+    two speakers. A content whose words are not stored (helpers.transcripts.update_transcripts())
+    has nothing to split, so it counts as done. Needs no audio."""
+    from helpers.transcripts import split_sentences
+    from helpers.wtpsplit_client import assert_wtpsplit_servers
+
+    model = assert_wtpsplit_servers(wtpsplit_servers)
+
+    def is_done(db_conn, content):
+        return db.sentences_done(db_conn, content.id, model)
+
+    def run(db_conn, server, content, wav_path):
+        return split_sentences(db_conn, content.id, server, model)
+
+    return Step("sentence split", "Splitting into sentences", wtpsplit_servers, is_done, run, needs_audio=False)
 
 
 def prepare_wav(db_conn: sqlite3.Connection, content: db.Content) -> Path:
@@ -290,10 +312,11 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
                 while (taken := take(k, server)) is not None:
                     item, probe = taken
                     i, content, wav_path, _ = item
+                    subject = wav_path or content.url
                     how = None
                     started = time.monotonic()
                     try:
-                        log(f"{log_prefix(i)} [{server}] {step.verb} {wav_path}...")
+                        log(f"{log_prefix(i)} [{server}] {step.verb} {subject}...")
                         result = step.run(db_conn, server, content, wav_path)
                         report.done[names[k]].append(content)
                         succeeded(k, server)
@@ -321,7 +344,7 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
                     except Exception as e:
                         retried = retry_or_fail(k, item, server, e, "error", probe)
                         log(
-                            f"{log_prefix(i)} {step.name.capitalize()} of '{wav_path}' failed on {server}"
+                            f"{log_prefix(i)} {step.name.capitalize()} of '{subject}' failed on {server}"
                             + (" (another server will try)" if retried else "")
                             + f":\n{e}"
                         )
@@ -362,12 +385,14 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
                         log(f"{log_prefix(i)} Already done: {content.url}")
                         report.already_done += 1
                         continue
-                    wav_path = prepare_wav(db_conn, content)
+                    # Only the steps that need it get the audio: the others never download it
+                    needs_audio = not steps or any(steps[k].needs_audio for k in pending_steps)
+                    wav_path = prepare_wav(db_conn, content) if needs_audio else None
                     if not pending_steps:
                         log(f"{log_prefix(i)} Audio ready: {wav_path}")
                     with cond:
                         for k in pending_steps:
-                            pending[k].append((i, content, wav_path, frozenset()))
+                            pending[k].append((i, content, wav_path if steps[k].needs_audio else None, frozenset()))
                         cond.notify_all()
                 except Exception as e:
                     report.failed_preparations.append((content, e))

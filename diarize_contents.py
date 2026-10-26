@@ -1,4 +1,5 @@
 from helpers.pipeline import diarization_step, run_steps
+from helpers.transcripts import update_transcripts
 
 import helpers.database as db
 import servers
@@ -24,4 +25,7 @@ print(f"{len(contents)} audios to diarize.")
 
 # A registered wav or mp3 deleted from disk is rebuilt, re-downloading the mp3 if needed
 report = run_steps(contents, [step])
-sys.exit(report.exit_code())
+# The words of the transcriptions (if any) follow the new diarizations
+with db.connect() as db_conn:
+    failures = update_transcripts(db_conn, [content.id for content in contents])
+sys.exit(report.exit_code() or (1 if failures else 0))

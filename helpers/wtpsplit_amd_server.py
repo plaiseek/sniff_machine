@@ -12,8 +12,9 @@ app = Flask(__name__)
 sat = SaT("{sat_model}")
 sat.half().to("cuda")
 
+# A list of texts gets a list of lists of sentences (one per text, in order)
 accepted_params = {{
-    "text_or_texts": str,
+    "text_or_texts": (str, list),
     "threshold": float,
     "stride": int,
     "block_size": int,
@@ -41,12 +42,15 @@ def verify_params(params: dict) -> list:
         if key not in accepted_params:
             errors.append(f"Unknown key '{{key}}'.")
             continue
-        expected_type = accepted_params[key]
-        if type(value) is not expected_type:
+        expected_types = accepted_params[key] if type(accepted_params[key]) is tuple else (accepted_params[key],)
+        if type(value) not in expected_types:
             errors.append(
-                f"Key '{{key}}' expects type '{{expected_type.__name__}}' "
+                f"Key '{{key}}' expects type '{{' or '.join(t.__name__ for t in expected_types)}}' "
                 f"but received '{{type(value).__name__}}'."
             )
+    texts = params.get("text_or_texts")
+    if type(texts) is list and not all(type(text) is str for text in texts):
+        errors.append("Key 'text_or_texts' must be a text or a list of texts.")
     return errors
 
 @app.route("/health", methods=["GET"])
@@ -59,7 +63,10 @@ def split():
     if errors := verify_params(params):
         print(errors)
         return jsonify({{"error": ", ".join(errors)}}), 400
-    return jsonify({{"sentences": sat.split(**params)}})
+    sentences = sat.split(**params)
+    if type(params["text_or_texts"]) is list:
+        sentences = list(sentences)  # SaT.split returns a generator for a list of texts
+    return jsonify({{"sentences": sentences, "model": "{sat_model}"}})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)

@@ -10,7 +10,6 @@ diarization of the content unless --diarization is given.
 """
 
 import argparse
-import datetime
 import subprocess
 import sys
 from pathlib import Path
@@ -18,30 +17,9 @@ from pathlib import Path
 import helpers.database as db
 import helpers.speakers as sp
 from helpers.pipeline import prepare_wav
+from helpers.speakers import describe_label
+from helpers.transcripts import content_link as link, hms
 from helpers.whisper_client import whisper_result_to_words
-
-
-def hms(ms: int) -> str:
-    return str(datetime.timedelta(seconds=ms // 1000))
-
-
-def link(content: db.Content, ms: int) -> str:
-    """The content's URL at this moment, for the platforms whose URLs take a start time."""
-    if content.platform == "Youtube":
-        return f"https://www.youtube.com/watch?v={content.external_id}&t={ms // 1000}s"
-    if content.platform == "TwitchVod":
-        h, rest = divmod(ms // 1000, 3600)
-        return f"https://www.twitch.tv/videos/{content.external_id.lstrip('v')}?t={h}h{rest // 60}m{rest % 60}s"
-    return f"{content.url} (at {hms(ms)})"
-
-
-def describe_label(labels: dict, label: str) -> str:
-    if label not in labels:
-        return ""
-    _, name, source, similarity = labels[label]
-    if source == "human":
-        return f"{name or 'nobody known'} (human)"
-    return f"{name or 'unknown'} (auto, {similarity:.2f})" if similarity is not None else f"{name or 'unknown'} (auto)"
 
 
 def print_labels(content: db.Content, diarization_id: int, turns: list[db.Turn], labels: dict) -> None:
@@ -120,7 +98,7 @@ def main() -> int:
             print("  (not transcribed)")
         else:
             # The words whose middle falls inside the turn
-            text = "".join(w for w, start, end in words if turn.start_ms <= (start + end) / 2 < turn.end_ms).strip()
+            text = "".join(w.text for w in words if turn.start_ms <= (w.start_ms + w.end_ms) / 2 < turn.end_ms).strip()
             print(f"  {text[:400] + ('...' if len(text) > 400 else '') if text else '(no words)'}")
     print(f"\nClip: {clip_path.resolve()}")
     return 0
