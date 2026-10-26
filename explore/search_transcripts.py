@@ -1,19 +1,25 @@
 """Find who said something: the sentences of the transcriptions that match a full-text query.
 
-    python3.11 search_transcripts.py "knafo mairie"              # sentences with both words
-    python3.11 search_transcripts.py '"mairie de paris"'         # this phrase
-    python3.11 search_transcripts.py "pete*"                     # péter, pété, pète... (case and accents ignored)
-    python3.11 search_transcripts.py "knafo" --uploader Psyhodelik --speaker "Jean Dupont" --limit 50
+    python3.11 explore/search_transcripts.py "knafo mairie"              # sentences with both words
+    python3.11 explore/search_transcripts.py '"mairie de paris"'         # this phrase
+    python3.11 explore/search_transcripts.py "pete*"                     # péter, pété, pète... (case and accents ignored)
+    python3.11 explore/search_transcripts.py "knafo" --uploader Psyhodelik --speaker "Jean Dupont" --limit 50
 
 The query is in SQLite FTS5 syntax: words (all of them), "a phrase", prefix*, OR, NOT, NEAR(a b, 5).
 Prints each sentence with its content, time, speaker (who the label is, when known) and a link to
-that moment, oldest content first. Searches the sentences stored by split_sentences.py.
+that moment, oldest content first. Searches the sentences stored by pipeline/split_sentences.py.
 """
 
 import argparse
+import os
 import sqlite3
 import sys
 import textwrap
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 from helpers.speakers import describe_label
@@ -47,7 +53,7 @@ WHERE {' AND '.join(where)}"""
 
     with db.connect() as db_conn:
         if not db_conn.execute("SELECT 1 FROM sentences LIMIT 1").fetchone():
-            sys.exit("No sentences stored yet: run python3.11 split_sentences.py")
+            sys.exit("No sentences stored yet: run python3.11 pipeline/split_sentences.py")
         try:
             total = db_conn.execute(f"SELECT COUNT(*) FROM ({query})", params).fetchone()[0]
             rows = db_conn.execute(query + " ORDER BY c.upload_date, c.id, s.start_ms LIMIT ?", params + [args.limit]).fetchall()

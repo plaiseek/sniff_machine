@@ -1,4 +1,4 @@
-"""The vLLM servers (OpenAI-compatible API) that ask_transcripts.py sends its questions to.
+"""The vLLM servers (OpenAI-compatible API) that explore/ask_transcripts.py sends its questions to.
 
 Start vLLM with the reasoning parser of the model (see vLLM's list of parsers), e.g. for Qwen3:
 

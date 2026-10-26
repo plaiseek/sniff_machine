@@ -1,10 +1,10 @@
 """Ask an LLM (served by vLLM) where something is said in the transcriptions, and by whom.
 
-    python3.11 ask_transcripts.py "Où parle-t-on de la mairie de Paris ?" --content 243
-    python3.11 ask_transcripts.py "Quand tient-il des propos haineux envers un groupe de personnes ?" \\
+    python3.11 explore/ask_transcripts.py "Où parle-t-on de la mairie de Paris ?" --content 243
+    python3.11 explore/ask_transcripts.py "Quand tient-il des propos haineux envers un groupe de personnes ?" \\
         --criteria criteria.txt --uploader Psyhodelik --speaker "Jean Dupont"
-    python3.11 ask_transcripts.py "..." --uploader Psyhodelik --dry-run   # what it would read, without the LLM
-    python3.11 ask_transcripts.py "..." --uploader Psyhodelik --show      # what was found, without the LLM
+    python3.11 explore/ask_transcripts.py "..." --uploader Psyhodelik --dry-run   # what it would read, without the LLM
+    python3.11 explore/ask_transcripts.py "..." --uploader Psyhodelik --show      # what was found, without the LLM
 
 The LLM reads each transcription in windows (with its times, speaker labels and who they are when
 known) and lists the passages that may match, then checks each one with more context: see
@@ -15,7 +15,7 @@ Asked again with the same question, criteria, speaker, model and settings, it on
 contents not read yet (or diarized since): run it in the background with a log on many contents.
 
 --speaker: only the sentences of the diarization labels named so (by a person, or guessed from the
-voice by identify_speakers.py) can match; the contents where no label is named so are left out.
+voice by speakers/identify_speakers.py) can match; the contents where no label is named so are left out.
 --criteria FILE: a precise definition of what matches, added to the question: e.g.
 criteria/haine_loi_1881.txt (hateful speech under French press law). Answers are leads to listen
 to, not verdicts.
@@ -27,9 +27,14 @@ measured while it runs.
 """
 
 import argparse
+import os
 import sys
 import textwrap
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 import servers
@@ -101,8 +106,8 @@ def main() -> int:
         )
         if not selected and args.speaker:
             sys.exit(
-                f"No label is named {args.speaker!r} in these contents: a person names one with enroll_speaker.py,"
-                " then identify_speakers.py finds them in the other diarized contents"
+                f"No label is named {args.speaker!r} in these contents: a person names one with speakers/enroll_speaker.py,"
+                " then speakers/identify_speakers.py finds them in the other diarized contents"
             )
         if not selected:
             return 0

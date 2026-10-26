@@ -4,6 +4,21 @@ A pipeline for automatically downloading and transcribing videos from YouTube, T
 
 ## Architecture
 
+### Layout
+
+Run every script from the repository root, as `python3.11 <folder>/<script>.py`:
+
+| Folder | What it holds |
+|---|---|
+| [jobs/](jobs/) | `job_template.py`, and the jobs made from it: select contents (channels, URLs, upload dates), then download, transcribe, diarize, embed and split them |
+| [pipeline/](pipeline/) | the same steps on what is already in the database |
+| [speakers/](speakers/) | listen to a speaker label, name it, find that voice in other contents, measure how reliable that is |
+| [explore/](explore/) | read and search the transcriptions, plot word counts, ask an LLM where something is said |
+| [model_servers/](model_servers/) | start the model servers (`run_*_servers.py`) and check them; their addresses are in [servers.py](servers.py) |
+| [admin/](admin/) | create the database, restore a backup |
+| [helpers/](helpers/) | the shared code: the database (`database.py`, `migrations.py`, `tables/`), the steps (`pipeline.py`, `jobs.py`), yt-dlp, and one client and one server module per model |
+| [criteria/](criteria/), [tests/](tests/), [docs/](docs/) | criteria for the LLM questions, tests, the media to add and the October 2026 review |
+
 ### Database
 
 A SQLite database (`cache/test.db`, see [helpers/database.py](helpers/database.py): `connect()`, and the queries of [helpers/tables/](helpers/tables/)) keeps track of:
@@ -11,9 +26,9 @@ A SQLite database (`cache/test.db`, see [helpers/database.py](helpers/database.p
 - **`contents`**: every video/audio content sniffed (platform, external id, URL, title, duration, uploader, channel id, series, upload date). Only the platform, external id and URL are mandatory; metadata an extractor does not give is `NULL` (except the title: yt-dlp substitutes a generic one).
 - **`files`**: files produced for each content (`ytdlp_info`, `ytdlp_audio`, `ytdlp_subtitles`, `16k_mono_wav`, `whisper_result`, ...), stored under `cache/`.
 - **`diarizations`**, **`turns`**, **`turn_embeddings`**: diarization runs of a content, their speaker turns, and one voice embedding per turn and model.
-- **`speakers`**, **`speaker_samples`** (+ **`sample_embeddings`**), **`speaker_labels`**: named people, reference ranges of their voice, and who each diarization label is (set by a person, or by `identify_speakers.py` with its similarity). Deleting a speaker deletes everything derived from their voice.
+- **`speakers`**, **`speaker_samples`** (+ **`sample_embeddings`**), **`speaker_labels`**: named people, reference ranges of their voice, and who each diarization label is (set by a person, or by `speakers/identify_speakers.py` with its similarity). Deleting a speaker deletes everything derived from their voice.
 - **`transcriptions`**, **`words`**, **`sentences`** (+ the full-text index **`sentences_fts`**): the words of each transcription (text, normalised form, time, probability) with the speaker turn each one falls in (the content's latest diarization), and their sentences, never across two speakers.
-- **`questions`**, **`question_contents`**, **`findings`**: questions asked to an LLM about the transcriptions (`ask_transcripts.py`), the contents each one was asked on, and the passages it checked, with its verdict, confidence, quote and explanation.
+- **`questions`**, **`question_contents`**, **`findings`**: questions asked to an LLM about the transcriptions (`explore/ask_transcripts.py`), the contents each one was asked on, and the passages it checked, with its verdict, confidence, quote and explanation.
 
 All pipeline steps are idempotent: if a file is already registered in the database, it is not re-downloaded / re-computed.
 
@@ -21,23 +36,23 @@ The schema is a list of migrations in [helpers/migrations.py](helpers/migrations
 
 To restore a backup, stop every script, job and datasette, then:
 ```bash
-python3.11 restore_backup.py                               # lists the backups
-python3.11 restore_backup.py cache/backups/<backup>.db
+python3.11 admin/restore_backup.py                               # lists the backups
+python3.11 admin/restore_backup.py cache/backups/<backup>.db
 ```
 It refuses a missing or damaged backup, saves the current database in `cache/backups/` first, and copies with SQLite's backup API (a plain `cp` over a database that still has a `test.db-wal` file can corrupt it).
 
 ### Model servers (Docker, AMD/ROCm)
 
-Each model runs as an HTTP server inside a Docker container built and managed by the `run_*_servers.py` scripts (images are built on first run):
+Each model runs as an HTTP server inside a Docker container built and managed by the `model_servers/run_*_servers.py` scripts (images are built on first run):
 
 | Server | Script | Model | Default port(s) |
 |--------|--------|-------|-----------------|
-| Whisper | [run_whisper_servers.py](run_whisper_servers.py) | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `large-v3` + Silero VAD, HIP build | 8070, 8071 |
-| Pyannote | [run_pyannote_servers.py](run_pyannote_servers.py) | `pyannote/speaker-diarization-community-1` | 8050 |
-| wtpsplit | [run_wtpsplit_servers.py](run_wtpsplit_servers.py) | SaT `sat-12l-sm` (sentence segmentation) | 8060 |
-| SpeechBrain | [run_speechbrain_servers.py](run_speechbrain_servers.py) | `speechbrain/spkrec-ecapa-voxceleb` (ECAPA-TDNN, 192-dim voice embeddings) | 8040 |
+| Whisper | [model_servers/run_whisper_servers.py](model_servers/run_whisper_servers.py) | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `large-v3` + Silero VAD, HIP build | 8070, 8071 |
+| Pyannote | [model_servers/run_pyannote_servers.py](model_servers/run_pyannote_servers.py) | `pyannote/speaker-diarization-community-1` | 8050 |
+| wtpsplit | [model_servers/run_wtpsplit_servers.py](model_servers/run_wtpsplit_servers.py) | SaT `sat-12l-sm` (sentence segmentation) | 8060 |
+| SpeechBrain | [model_servers/run_speechbrain_servers.py](model_servers/run_speechbrain_servers.py) | `speechbrain/spkrec-ecapa-voxceleb` (ECAPA-TDNN, 192-dim voice embeddings) | 8040 |
 
-`ask_transcripts.py` also needs an LLM served by [vLLM](https://docs.vllm.ai/) (OpenAI-compatible API, default port 8000), which this repository does not build: start it wherever it runs, with the reasoning parser of the model (`qwen3` for Qwen3, see vLLM's list), e.g. `vllm serve <model> --max-model-len 262144 --reasoning-parser qwen3`, and list it in `VLLM_SERVERS` of [servers.py](servers.py).
+`explore/ask_transcripts.py` also needs an LLM served by [vLLM](https://docs.vllm.ai/) (OpenAI-compatible API, default port 8000), which this repository does not build: start it wherever it runs, with the reasoning parser of the model (`qwen3` for Qwen3, see vLLM's list), e.g. `vllm serve <model> --max-model-len 262144 --reasoning-parser qwen3`, and list it in `VLLM_SERVERS` of [servers.py](servers.py).
 
 Python clients for these servers live in [helpers/](helpers/) (`whisper_client.py`, `pyannote_client.py`, `wtpsplit_client.py`, `speechbrain_client.py`, `vllm_client.py`). All servers expose a `/health` endpoint; inference endpoints are `/inference` (Whisper), `/diarize` (Pyannote), `/split` (wtpsplit) and `/embed` (SpeechBrain).
 
@@ -76,21 +91,21 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
 1. **Create the database** (optional: every script creates or migrates it when it connects):
    ```bash
-   python3.11 create_sqlite_db.py
+   python3.11 admin/create_sqlite_db.py
    ```
 
-2. **Start the model servers** you need. In each `run_*_servers.py`, adjust `gpu_instances` (a `{device_id: [ports]}` mapping) and the build parameters (`gfx_version` for Whisper, `sat_model` for wtpsplit) to your hardware, then:
+2. **Start the model servers** you need. In each `model_servers/run_*_servers.py`, adjust `gpu_instances` (a `{device_id: [ports]}` mapping) and the build parameters (`gfx_version` for Whisper, `sat_model` for wtpsplit) to your hardware, then:
    ```bash
-   python3.11 run_whisper_servers.py    # transcription
-   python3.11 run_pyannote_servers.py   # speaker diarization
-   python3.11 run_wtpsplit_servers.py   # sentence segmentation
-   python3.11 run_speechbrain_servers.py # voice embeddings
+   python3.11 model_servers/run_whisper_servers.py    # transcription
+   python3.11 model_servers/run_pyannote_servers.py   # speaker diarization
+   python3.11 model_servers/run_wtpsplit_servers.py   # sentence segmentation
+   python3.11 model_servers/run_speechbrain_servers.py # voice embeddings
    ```
    Each script builds the Docker image if needed, starts the containers, and streams their logs until you hit Ctrl+C.
 
 3. **Set the server addresses** in [servers.py](servers.py) (one `host:port` per container), and check them:
    ```bash
-   python3.11 check_servers.py              # OK / BUSY / LOADING / DOWN for each server
+   python3.11 model_servers/check_servers.py              # OK / BUSY / LOADING / DOWN for each server
    ```
 
 4. **Run a job**: copy [jobs/job_template.py](jobs/job_template.py) to `jobs/<name>.py`, edit its settings (channels or playlists to list, single URLs, upload dates, steps), then:
@@ -109,38 +124,38 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
 5. **Or run a script** on what is already in the database:
 
-   - [transcript_pending_audios.py](transcript_pending_audios.py) transcribes every content with an audio file (`16k_mono_wav` or `ytdlp_audio`) and no `whisper_result`, e.g. after an interrupted job or failed transcriptions. Contents without audio (e.g. subtitles only) are left out.
-   - [diarize_contents.py](diarize_contents.py) diarizes every content with an audio file and no diarization yet for the server's model and the script's `params` (e.g. `{"num_speakers": 2}`). Each run is stored as a `diarizations` row with all its `turns` (regular and exclusive, with the overlapped speech of each turn), and the server's raw answer is kept in `cache/pyannote_result/`.
-   - [store_words.py](store_words.py) stores the words of every transcription not stored yet, and aligns them to the diarizations made since (no server needed). The transcription and diarization scripts and the jobs do it too.
-   - [split_sentences.py](split_sentences.py) cuts the stored words of each content into runs of one speaker, then into sentences with wtpsplit (`--punctuation`: after `. ? ! …`, no server).
-   - [embed_speaker_turns.py](embed_speaker_turns.py) computes the voice embedding (SpeechBrain) of every exclusive turn of every diarization that has none yet for the server's model, one request per content. Turns shorter than 1 s get a `NULL` embedding, so that they are not sent again.
+   - [pipeline/transcript_pending_audios.py](pipeline/transcript_pending_audios.py) transcribes every content with an audio file (`16k_mono_wav` or `ytdlp_audio`) and no `whisper_result`, e.g. after an interrupted job or failed transcriptions. Contents without audio (e.g. subtitles only) are left out.
+   - [pipeline/diarize_contents.py](pipeline/diarize_contents.py) diarizes every content with an audio file and no diarization yet for the server's model and the script's `params` (e.g. `{"num_speakers": 2}`). Each run is stored as a `diarizations` row with all its `turns` (regular and exclusive, with the overlapped speech of each turn), and the server's raw answer is kept in `cache/pyannote_result/`.
+   - [pipeline/store_words.py](pipeline/store_words.py) stores the words of every transcription not stored yet, and aligns them to the diarizations made since (no server needed). The transcription and diarization scripts and the jobs do it too.
+   - [pipeline/split_sentences.py](pipeline/split_sentences.py) cuts the stored words of each content into runs of one speaker, then into sentences with wtpsplit (`--punctuation`: after `. ? ! …`, no server).
+   - [pipeline/embed_speaker_turns.py](pipeline/embed_speaker_turns.py) computes the voice embedding (SpeechBrain) of every exclusive turn of every diarization that has none yet for the server's model, one request per content. Turns shorter than 1 s get a `NULL` embedding, so that they are not sent again.
 
-6. **Name the speakers** (after `embed_speaker_turns.py` or a job with `"embed"`):
+6. **Name the speakers** (after `pipeline/embed_speaker_turns.py` or a job with `"embed"`):
    ```bash
-   python3.11 listen_speaker.py 243                          # the labels of content 243: minutes, clean minutes, who they are
-   python3.11 listen_speaker.py 243 SPEAKER_01               # a clip of the label's longest clean turns + what is said + links
-   python3.11 enroll_speaker.py "Name" 243 --label SPEAKER_01  # this label is Name (or START END ranges instead of --label)
-   python3.11 identify_speakers.py --dry-run                 # which labels of the other contents are Name, then without --dry-run
-   python3.11 evaluate_speakers.py                           # precision / recall per threshold, from the labels you set
+   python3.11 speakers/listen_speaker.py 243                          # the labels of content 243: minutes, clean minutes, who they are
+   python3.11 speakers/listen_speaker.py 243 SPEAKER_01               # a clip of the label's longest clean turns + what is said + links
+   python3.11 speakers/enroll_speaker.py "Name" 243 --label SPEAKER_01  # this label is Name (or START END ranges instead of --label)
+   python3.11 speakers/identify_speakers.py --dry-run                 # which labels of the other contents are Name, then without --dry-run
+   python3.11 speakers/evaluate_speakers.py                           # precision / recall per threshold, from the labels you set
    ```
-   A label's voice is the duration-weighted mean of the embeddings of its clean turns (at least 3 s, at most 10 % overlapped speech). `identify_speakers.py` names a label after the closest enrolled speaker when their cosine similarity reaches `--threshold` (0.6 by default, provisional: on the first five videos, one voice in different videos scored 0.90-0.95, different voices at most 0.45), and never changes a label you set. `enroll_speaker.py --forget "Name"` deletes a speaker and all that names them (older copies remain in `cache/backups/`).
+   A label's voice is the duration-weighted mean of the embeddings of its clean turns (at least 3 s, at most 10 % overlapped speech). `speakers/identify_speakers.py` names a label after the closest enrolled speaker when their cosine similarity reaches `--threshold` (0.6 by default, provisional: on the first five videos, one voice in different videos scored 0.90-0.95, different voices at most 0.45), and never changes a label you set. `speakers/enroll_speaker.py --forget "Name"` deletes a speaker and all that names them (older copies remain in `cache/backups/`).
 
    Voiceprints that identify named people are biometric data (GDPR art. 9): enroll public figures in their public role only, keep the database, the audio and `cache/speaker_clips/` private, and check automatic names before publishing anything built on them.
 
-7. **Read what was said, and by whom** (after `store_words.py`, or a job that transcribes):
+7. **Read what was said, and by whom** (after `pipeline/store_words.py`, or a job that transcribes):
    ```bash
-   python3.11 show_transcript.py 243 --from 10:00 --to 15:00     # paragraphs per speaker, with times, links and names when known
-   python3.11 search_transcripts.py '"mairie de paris"'          # who said it, where (needs split_sentences.py); pete* = péter, pété...
-   python3.11 plot_word_counts.py Psyhodelik --speaker "Name" --output counts.png   # cumulated word counts (edit THEMES)
+   python3.11 explore/show_transcript.py 243 --from 10:00 --to 15:00     # paragraphs per speaker, with times, links and names when known
+   python3.11 explore/search_transcripts.py '"mairie de paris"'          # who said it, where (needs pipeline/split_sentences.py); pete* = péter, pété...
+   python3.11 explore/plot_word_counts.py Psyhodelik --speaker "Name" --output counts.png   # cumulated word counts (edit THEMES)
    ```
-   The words have the times of Whisper's tokens, and the speaker of the exclusive turn their middle falls in (about 5 % fall between turns). `plot_word_counts.py` needs matplotlib (`python3.11 -m pip install matplotlib`; on Ubuntu, python3.11 may also need `pip install --user pillow`).
+   The words have the times of Whisper's tokens, and the speaker of the exclusive turn their middle falls in (about 5 % fall between turns). `explore/plot_word_counts.py` needs matplotlib (`python3.11 -m pip install matplotlib`; on Ubuntu, python3.11 may also need `pip install --user pillow`).
 
 8. **Ask an LLM where something is said** (a vLLM server, see above), when no fixed words find it:
    ```bash
-   python3.11 ask_transcripts.py "Où parle-t-on de la mairie de Paris ?" --uploader Psyhodelik --dry-run   # how much it reads, how long it takes
-   nohup python3.11 ask_transcripts.py "Quels propos pourraient être poursuivis comme discours de haine selon la loi du 29 juillet 1881 ?" \
+   python3.11 explore/ask_transcripts.py "Où parle-t-on de la mairie de Paris ?" --uploader Psyhodelik --dry-run   # how much it reads, how long it takes
+   nohup python3.11 explore/ask_transcripts.py "Quels propos pourraient être poursuivis comme discours de haine selon la loi du 29 juillet 1881 ?" \
        --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from 2025-10-26 > ask.log 2>&1 &   # the last year (see below)
-   python3.11 ask_transcripts.py "Quels propos ..." --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from 2025-10-26 --show
+   python3.11 explore/ask_transcripts.py "Quels propos ..." --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from 2025-10-26 --show
    ```
    It reads each transcription in windows of about 5,000 words (30 min) with times and speakers, and lists the passages that may match (first pass, no thinking), then checks each one with 600 words around it (second pass, the model thinks first): the matching sentences and a quote, what the speaker does with these words (own words, approving what they quote or read, quoting or reading without a stance, quoting to criticize), what of the question it meets (`Meets:`), what speaks against it (`Against:`), why, the verdict (`yes`, `unsure`, `no`) and a confidence. [criteria/haine_loi_1881.txt](criteria/haine_loi_1881.txt) defines hateful speech under French press law, to find leads for a lawyer: `Meets:` gives the offence, the group targeted and the protected criterion, `Against:` what a defence could object. These offences are prescribed one year after publication (to be confirmed by the lawyer), hence `--uploaded-from` a year back. The criteria are part of the question: editing them asks everything again, so have them checked before a long run. Each vLLM server gets `--clients` requests at once (default 8, where it is most efficient), never needing more than `--kv-tokens` of KV cache (default 440,000), the contents that started first going first; `--tokens-per-s` (default 300) gives the dry run's time estimate, and each content's line gives the speed measured and the time left. The LLM cites sentence numbers, never times: they are mapped back to the words, with a link to each moment. `--criteria FILE` adds a precise definition of what matches to the question; `--speaker` keeps the sentences of the labels named so. Asked again, it only reads the contents not read yet (or diarized since); a new question, criteria, speaker, model or prompt version reads everything again. The whole Psyhodelik channel (1.47 M words) is about 2.9 M tokens read by the first pass, and 2.6 to 10.5 M tokens written by both passes (the hateful-speech criteria are the high end, about 7 tokens per word: many passages to check, with thinking): about 2.5 to 10 h at 300 tokens/s, plus the reading. The answers are leads to listen to, not verdicts.
 
@@ -163,7 +178,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 | [write-pipeline-script](.claude/skills/write-pipeline-script/SKILL.md) | anything the job template cannot do: a custom selection, a new step, an export |
 
 - Claude Code loads `.claude/skills/` and `CLAUDE.md`. Agents that follow the open Agent Skills convention (Codex, Gemini CLI, Cursor, Copilot, OpenCode, goose...) find the same skills through the `.agents/skills` link, and `GEMINI.md` imports `AGENTS.md` for Gemini CLI. Any other agent can simply be told to read `AGENTS.md` first.
-- In Claude Code, [.claude/hooks/protect_data.py](.claude/hooks/protect_data.py) (registered in [.claude/settings.json](.claude/settings.json)) blocks the usual ways an agent could destroy `cache/test.db` or `cache/backups/`: deleting, moving or copying over them (also from inside `cache/`), `git clean` with `-x`, any use of the `sqlite3` command line on the database without `-readonly`, and `enroll_speaker.py --forget`.
+- In Claude Code, [.claude/hooks/protect_data.py](.claude/hooks/protect_data.py) (registered in [.claude/settings.json](.claude/settings.json)) blocks the usual ways an agent could destroy `cache/test.db` or `cache/backups/`: deleting, moving or copying over them (also from inside `cache/`), `git clean` with `-x`, any use of the `sqlite3` command line on the database without `-readonly`, and `speakers/enroll_speaker.py --forget`.
 - The skills were tested with a small model on sandbox copies of the repository, with fake servers and fake channels: requests in English and French, relative dates ("la semaine dernière"), re-diarization with a speaker count, a server down, an ambiguous date (the agent asks), a failing content (retried once, then reported), single URLs, questions on the database and an export script. A local model (e.g. through `ollama launch`) needs a context of at least 64k tokens to hold a skill and a job's output.
 
 ## Tests
@@ -172,7 +187,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 python3.11 -m unittest discover tests
 ```
 
-No GPU, network or Docker needed: the migrations on a database of their own, and `ask_transcripts.py`'s question step against a fake vLLM server ([tests/fake_vllm.py](tests/fake_vllm.py)): requests at once, the KV-cache limit, a window cut then read in halves, an empty answer asked again, an error that cancels the rest, resuming.
+No GPU, network or Docker needed: the migrations on a database of their own, and `explore/ask_transcripts.py`'s question step against a fake vLLM server ([tests/fake_vllm.py](tests/fake_vllm.py)): requests at once, the KV-cache limit, a window cut then read in halves, an empty answer asked again, an error that cancels the rest, resuming.
 
 ## Roadmap
 

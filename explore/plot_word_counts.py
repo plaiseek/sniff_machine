@@ -1,21 +1,27 @@
 """Plot how often some words are said in the contents of a channel, cumulated by upload date.
 
-    python3.11 plot_word_counts.py Psyhodelik                      # its transcribed contents
-    python3.11 plot_word_counts.py Psyhodelik --from 2026-04-01 --to 2026-06-30 --output counts.png
-    python3.11 plot_word_counts.py Psyhodelik --speaker "Jean Dupont"
+    python3.11 explore/plot_word_counts.py Psyhodelik                      # its transcribed contents
+    python3.11 explore/plot_word_counts.py Psyhodelik --from 2026-04-01 --to 2026-06-30 --output counts.png
+    python3.11 explore/plot_word_counts.py Psyhodelik --speaker "Jean Dupont"
 
-The words come from the database (store_words.py stores them). A word counts for a theme when its
+The words come from the database (pipeline/store_words.py stores them). A word counts for a theme when its
 normalised form (words.norm: lower case, without the punctuation around it) holds one of the
 theme's words as a whole word: "l'pipi" and "pipi-caca" count for « pipi ». With --speaker, only
-the words of the labels named so (by a person, or automatically by identify_speakers.py) count, in
+the words of the labels named so (by a person, or automatically by speakers/identify_speakers.py) count, in
 the contents where such a label is: it keeps the other voices (guests, TTS donations, game
 dialogue) out. Edit THEMES to count other words.
 """
 
 import argparse
+import os
 import re
 import sys
 from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 

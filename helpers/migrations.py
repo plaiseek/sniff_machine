@@ -191,7 +191,7 @@ END""",
 END""",
         "CREATE INDEX sentences_by_diarization ON sentences(diarization_id)",
     ],
-    # v7: questions asked to an LLM about the transcriptions (ask_transcripts.py), and the passages
+    # v7: questions asked to an LLM about the transcriptions (explore/ask_transcripts.py), and the passages
     # it found: leads to listen to, not verdicts
     [
         """CREATE TABLE questions (

@@ -1,9 +1,15 @@
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
+
 from helpers.pipeline import run_steps, transcription_step
 from helpers.transcripts import update_transcripts
-
 import helpers.database as db
 import servers
-import sys
 
 # Contents with no audio file (e.g. subtitles only) are left out: their audio is never downloaded
 with db.connect() as db_conn:

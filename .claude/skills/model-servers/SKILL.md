@@ -1,25 +1,25 @@
 ---
 name: model-servers
-description: Checks, starts or stops the GPU model servers of this repository (Whisper transcription, Pyannote diarization, SpeechBrain voice embeddings, wtpsplit sentence segmentation) and changes the server addresses in servers.py. Use when check_servers.py reports a server DOWN, when the user asks to start or stop servers, or when a job fails because a server is unreachable.
+description: Checks, starts or stops the GPU model servers of this repository (Whisper transcription, Pyannote diarization, SpeechBrain voice embeddings, wtpsplit sentence segmentation) and changes the server addresses in servers.py. Use when model_servers/check_servers.py reports a server DOWN, when the user asks to start or stop servers, or when a job fails because a server is unreachable.
 ---
 
 # Model servers
 
-The servers are Docker containers built and run by the `run_*_servers.py` scripts, on machines with an AMD GPU (ROCm). Jobs and scripts find them through the addresses in `servers.py`.
+The servers are Docker containers built and run by the `model_servers/run_*_servers.py` scripts, on machines with an AMD GPU (ROCm). Jobs and scripts find them through the addresses in `servers.py`.
 
 | Kind | Used by the step | Start script | Default port(s) | Address list in `servers.py` |
 |---|---|---|---|---|
-| whisper | transcribe | `python3.11 run_whisper_servers.py` | 8070, 8071 | `WHISPER_SERVERS` |
-| pyannote | diarize | `python3.11 run_pyannote_servers.py` | 8050 | `PYANNOTE_SERVERS` |
-| speechbrain | embed (voice embeddings) | `python3.11 run_speechbrain_servers.py` | 8040 | `SPEECHBRAIN_SERVERS` |
-| wtpsplit | split (sentences) | `python3.11 run_wtpsplit_servers.py` | 8060 | `WTPSPLIT_SERVERS` |
-| vllm | ask (`ask_transcripts.py`) | none: the user runs vLLM (`vllm serve <model> --reasoning-parser <its parser>`) | 8000 | `VLLM_SERVERS` |
+| whisper | transcribe | `python3.11 model_servers/run_whisper_servers.py` | 8070, 8071 | `WHISPER_SERVERS` |
+| pyannote | diarize | `python3.11 model_servers/run_pyannote_servers.py` | 8050 | `PYANNOTE_SERVERS` |
+| speechbrain | embed (voice embeddings) | `python3.11 model_servers/run_speechbrain_servers.py` | 8040 | `SPEECHBRAIN_SERVERS` |
+| wtpsplit | split (sentences) | `python3.11 model_servers/run_wtpsplit_servers.py` | 8060 | `WTPSPLIT_SERVERS` |
+| vllm | ask (`explore/ask_transcripts.py`) | none: the user runs vLLM (`vllm serve <model> --reasoning-parser <its parser>`) | 8000 | `VLLM_SERVERS` |
 
 ## Check
 
 ```bash
-python3.11 check_servers.py                 # every server in servers.py
-python3.11 check_servers.py transcribe      # only those a step needs: transcribe, diarize, embed, split, ask
+python3.11 model_servers/check_servers.py                 # every server in servers.py
+python3.11 model_servers/check_servers.py transcribe      # only those a step needs: transcribe, diarize, embed, split, ask
 ```
 
 `OK`: ready. `BUSY`: working on a request (or still loading); work sent to it waits, which is fine. `LOADING`: Whisper is loading another model; a job started now waits for it (up to 10 minutes). `DOWN`: not reachable, or still starting (a starting Whisper server opens its port only once its model is loaded). Exit code 1 when a server is DOWN.
@@ -30,20 +30,20 @@ python3.11 check_servers.py transcribe      # only those a step needs: transcrib
 2. If it is `127.0.0.1` and the user asked you to start it: check that Docker answers (`docker ps`). If it does not, stop and tell the user to start Docker.
 3. If the script of that kind is already running (`ps -ef | grep "[r]un_pyannote_servers"` prints a line, with your kind's script name), the servers are starting: go to step 4. Otherwise start them in the background, with a log:
    ```bash
-   nohup python3.11 run_pyannote_servers.py > cache/pyannote_servers.log 2>&1 &
+   nohup python3.11 model_servers/run_pyannote_servers.py > cache/pyannote_servers.log 2>&1 &
    ```
    The first start builds the Docker image: from 10 minutes to more than an hour. Pyannote also needs the `hf.token` file at the repository root (a Hugging Face token whose account accepted the conditions of `pyannote/speaker-diarization-community-1`); if it is missing, stop and tell the user.
-4. Run `python3.11 check_servers.py <kind>` every minute until it says `OK` (the model loads after the build). Stop and show the user the last 30 lines of the log if the log shows `Traceback`, `ERROR` or `Failed to build`, if the script is gone (`ps -ef | grep "[r]un_pyannote_servers"` prints nothing, with your kind's script name), or after 90 minutes.
+4. Run `python3.11 model_servers/check_servers.py <kind>` every minute until it says `OK` (the model loads after the build). Stop and show the user the last 30 lines of the log if the log shows `Traceback`, `ERROR` or `Failed to build`, if the script is gone (`ps -ef | grep "[r]un_pyannote_servers"` prints nothing, with your kind's script name), or after 90 minutes.
 
 ## Rules
 
-- **Never run a `run_*_servers.py` script when `check_servers.py` says OK or BUSY for that kind**: it first stops every running container of that kind, which kills the work in progress of running jobs.
+- **Never run a `model_servers/run_*_servers.py` script when `model_servers/check_servers.py` says OK or BUSY for that kind**: it first stops every running container of that kind, which kills the work in progress of running jobs.
 - A server can be stuck and still say OK or BUSY (e.g. a GPU hang): a job then ends with exit code 5 and a line saying it `is probably stuck` (no answer within a day). Tell the user which server; restarting it is their decision.
-- Stop servers only when the user asks. A `run_*_servers.py` started in a terminal stops its containers on Ctrl+C. One started in the background ignores Ctrl+C signals: stop its containers with the matching function, then kill the script:
+- Stop servers only when the user asks. A `model_servers/run_*_servers.py` started in a terminal stops its containers on Ctrl+C. One started in the background ignores Ctrl+C signals: stop its containers with the matching function, then kill the script:
   ```bash
   python3.11 -c "from helpers.pyannote_amd_server import stop_all_pyannote_containers as stop; stop()"
-  kill <pid of run_pyannote_servers.py>
+  kill <pid of model_servers/run_pyannote_servers.py>
   ```
   (`stop_all_whisper_containers` in `helpers.whisper_amd_server`, `stop_all_speechbrain_containers` in `helpers.speechbrain_amd_server`, `stop_all_wtpsplit_containers` in `helpers.wtpsplit_amd_server`.)
 - Edit `servers.py` only to put the addresses the user gave you. Each address is one server and gets one worker; list each server once.
-- The ports and GPUs are set by `gpu_instances = {gpu: [ports]}` near the top of each `run_*_servers.py`. Change them only when the user asks, and update `servers.py` to match.
+- The ports and GPUs are set by `gpu_instances = {gpu: [ports]}` near the top of each `model_servers/run_*_servers.py`. Change them only when the user asks, and update `servers.py` to match.

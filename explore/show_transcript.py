@@ -1,18 +1,24 @@
 """Print who said what in a content: its transcription, in paragraphs of one speaker.
 
-    python3.11 show_transcript.py CONTENT_ID                          # all of it
-    python3.11 show_transcript.py CONTENT_ID --from 10:00 --to 12:30  # a part ([H:]MM:SS or seconds)
-    python3.11 show_transcript.py CONTENT_ID --speaker SPEAKER_01     # one label, or a speaker's name
+    python3.11 explore/show_transcript.py CONTENT_ID                          # all of it
+    python3.11 explore/show_transcript.py CONTENT_ID --from 10:00 --to 12:30  # a part ([H:]MM:SS or seconds)
+    python3.11 explore/show_transcript.py CONTENT_ID --speaker SPEAKER_01     # one label, or a speaker's name
 
 The speakers are the labels of the content's latest diarization, with who they are when known: a
-name set by a person (human), or found by identify_speakers.py (auto, with its similarity: a
+name set by a person (human), or found by speakers/identify_speakers.py (auto, with its similarity: a
 guess). Each paragraph starts with its time and a link to that moment. Uses the sentences stored
-by split_sentences.py, or cuts the words on punctuation when there are none.
+by pipeline/split_sentences.py, or cuts the words on punctuation when there are none.
 """
 
 import argparse
+import os
 import sys
 import textwrap
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 from helpers.speakers import describe_label

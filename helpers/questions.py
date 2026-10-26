@@ -1,4 +1,4 @@
-"""Ask an LLM where something is said in a content's transcription (ask_transcripts.py), in two passes:
+"""Ask an LLM where something is said in a content's transcription (explore/ask_transcripts.py), in two passes:
 
 1. Screening: the transcription in windows of WINDOW_WORDS words overlapping by OVERLAP_WORDS, one
    numbered sentence per line, with times and speaker labels. Without thinking, the LLM lists every
@@ -406,7 +406,7 @@ def ask_content(db_conn: sqlite3.Connection, run: _Run, server: str, content: db
     of what was found before. Returns a description of it."""
     state = db.get_transcription_state(db_conn, content.id)
     if state is None:
-        raise ValueError(f"The words of content {content.id} are not stored (see store_words.py)")
+        raise ValueError(f"The words of content {content.id} are not stored (see pipeline/store_words.py)")
     diarization_id = state[1]
     labels = db.get_speaker_labels(db_conn, diarization_id) if diarization_id else {}
     sentences = content_sentences(db_conn, content.id)

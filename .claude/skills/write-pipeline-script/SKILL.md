@@ -16,7 +16,7 @@ First check whether the `pipeline-job` skill covers the request: selecting listi
   ROOT = Path(__file__).resolve().parents[1]
   os.chdir(ROOT); sys.path.insert(0, str(ROOT))
   ```
-- A new reusable feature: a script at the repository root, like `diarize_contents.py`. Put its settings in UPPERCASE constants at the top.
+- A new reusable feature: a script in the folder of its task (`pipeline/`, `speakers/`, `explore/`, ...), like `pipeline/diarize_contents.py`, starting with the same lines so that it runs from the repository root. Put its settings in UPPERCASE constants at the top.
 
 ## Building blocks
 
@@ -39,14 +39,14 @@ from helpers.pipeline import prepare_wav, run_steps, transcription_step, diariza
 | `db.get_diarization_id(db_conn, content.id, model, params)`, `db.get_turns(db_conn, diarization_id, exclusive=True)` | a stored diarization and its turns (`speaker`, `start_ms`, `end_ms`, `overlap_ms`) |
 | `run_steps(diarized_contents, [embedding_step(servers.SPEECHBRAIN_SERVERS)])` | voice embeddings of the exclusive turns, in a later `run_steps` call than the diarization (the steps of one call run side by side) |
 | `db.get_speaker_labels(db_conn, diarization_id)` | `{label: (speaker_id, name, source, similarity)}`: who the labels are |
-| `import helpers.speakers as sp`: `sp.label_voices(db_conn, diarization_id, model)`, `sp.speaker_voices(db_conn, model)`, `sp.best_match(voice, speakers)`, `sp.is_clean(turn)` | voice vectors of the labels and of the named speakers, the closest speaker; never write labels yourself, `identify_speakers.py` does |
+| `import helpers.speakers as sp`: `sp.label_voices(db_conn, diarization_id, model)`, `sp.speaker_voices(db_conn, model)`, `sp.best_match(voice, speakers)`, `sp.is_clean(turn)` | voice vectors of the labels and of the named speakers, the closest speaker; never write labels yourself, `speakers/identify_speakers.py` does |
 | `db.get_words(db_conn, content.id)`, `db.get_words_with_speakers(db_conn, content.id)` | the stored words of a content in order (`idx`, `text`, `norm`, `start_ms`, `end_ms`, `prob`, `turn_id`), the second with the label of their turn (None: no turn) |
 | `db.get_sentences(db_conn, content.id)` | its stored sentences: `(first_idx, last_idx, start_ms, end_ms, speaker, text)` |
 | `from helpers.transcripts import update_transcripts` | `update_transcripts(db_conn, [content ids])` stores the words of the transcriptions not stored yet and aligns them to new diarizations (prints a line per content); jobs and the transcription / diarization scripts call it |
 | `run_steps(transcribed_contents, [sentence_step(servers.WTPSPLIT_SERVERS)])` | the sentences of the stored words (wtpsplit), never across two speakers; needs no audio. `helpers.transcripts.split_sentences(db_conn, content.id)` splits on punctuation without a server |
 | `from helpers.transcripts import speaker_runs, content_link, hms` | the words in runs of one speaker; a link to a moment of a content; ms as `H:MM:SS` |
 | `from helpers.vllm_client import assert_vllm_servers, chat_json` | `vllm = assert_vllm_servers(servers.VLLM_SERVERS)`: the vLLM servers that answer, their model, whether it thinks first (`vllm.reasoning`); `chat_json(address, vllm.model, system, user, json_schema, thinking, max_tokens, sampling)` -> `Reply(answer, prompt_tokens, completion_tokens, finish_reason)`, `answer` a dict, None when there is none (`finish_reason` `"length"`: cut by `max_tokens`; otherwise the model ended while thinking: ask again) |
-| `from helpers.questions import question_step, question_text, settings` | the two-pass question of `ask_transcripts.py` as a step: `db.add_question(db_conn, question_text(question, criteria), speaker, vllm.model, settings(vllm.reasoning))`, then `run_steps(contents, [question_step(vllm, ServerHints(clients, kv_tokens, tokens_per_s), question_id, question, criteria, speaker, words)])` (`ServerHints` from `helpers.vllm_client`: what each server can do; `words`: of the contents not done, for the time left); `db.get_findings(db_conn, question_id)` reads what it found |
+| `from helpers.questions import question_step, question_text, settings` | the two-pass question of `explore/ask_transcripts.py` as a step: `db.add_question(db_conn, question_text(question, criteria), speaker, vllm.model, settings(vllm.reasoning))`, then `run_steps(contents, [question_step(vllm, ServerHints(clients, kv_tokens, tokens_per_s), question_id, question, criteria, speaker, words)])` (`ServerHints` from `helpers.vllm_client`: what each server can do; `words`: of the contents not done, for the time left); `db.get_findings(db_conn, question_id)` reads what it found |
 | `from helpers.whisper_client import whisper_result_to_words` | the words of a `whisper_result` file (`text`, `start_ms`, `end_ms`, `prob`), on the same timeline as the turns: the stored words come from it |
 | `db.add_content_file(db_conn, path, content.id, file_type, variant="")`, `db.write_atomic(path, text)` | register a file you produced; write it without ever leaving a half-written file |
 

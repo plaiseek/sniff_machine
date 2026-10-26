@@ -1,11 +1,11 @@
 """Split the transcriptions stored in the database into sentences, never across two speakers.
 
-    python3.11 split_sentences.py                  # every content, with the wtpsplit servers of servers.py
-    python3.11 split_sentences.py 7 243            # only these contents
-    python3.11 split_sentences.py --punctuation    # no server: a sentence ends after . ? ! or …
+    python3.11 pipeline/split_sentences.py                  # every content, with the wtpsplit servers of servers.py
+    python3.11 pipeline/split_sentences.py 7 243            # only these contents
+    python3.11 pipeline/split_sentences.py --punctuation    # no server: a sentence ends after . ? ! or …
                                                    # (only the contents not split yet, by any splitter)
 
-First stores the words not stored yet (as store_words.py does). Then cuts the words of each content
+First stores the words not stored yet (as pipeline/store_words.py does). Then cuts the words of each content
 into runs of one speaker (the labels of its latest diarization; one run when it is not diarized)
 and each run into sentences. wtpsplit (SaT) also finds the sentences that Whisper did not
 punctuate: it replaces the sentences split on punctuation. A content already split with the same
@@ -14,7 +14,13 @@ split them again.
 """
 
 import argparse
+import os
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 import servers

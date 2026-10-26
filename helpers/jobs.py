@@ -190,7 +190,7 @@ def _run_job(
             if "split" in steps:
                 splitting = sentence_step(servers.WTPSPLIT_SERVERS)
         except SystemExit as e:  # the client's server check failed
-            print(f"{e.code}\nNothing done: a server needed by the steps is not ready (see check_servers.py).")
+            print(f"{e.code}\nNothing done: a server needed by the steps is not ready (see model_servers/check_servers.py).")
             return 4
 
     skipped = []  # (url, reason, is_error): listing entries or URLs left out

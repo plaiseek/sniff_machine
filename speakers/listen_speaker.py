@@ -1,7 +1,7 @@
-"""Hear who a diarization label is, before naming them with enroll_speaker.py.
+"""Hear who a diarization label is, before naming them with speakers/enroll_speaker.py.
 
-    python3.11 listen_speaker.py CONTENT_ID                 # the labels of the content and who they are
-    python3.11 listen_speaker.py CONTENT_ID SPEAKER_01      # a clip of the label's longest clean turns
+    python3.11 speakers/listen_speaker.py CONTENT_ID                 # the labels of the content and who they are
+    python3.11 speakers/listen_speaker.py CONTENT_ID SPEAKER_01      # a clip of the label's longest clean turns
 
 The clip (cache/speaker_clips/) joins the label's longest clean turns (at least 3 s, little
 overlapped speech) with a short silence between them; each turn is printed with its time, a link
@@ -10,9 +10,14 @@ diarization of the content unless --diarization is given.
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 import helpers.speakers as sp
@@ -32,7 +37,7 @@ def print_labels(content: db.Content, diarization_id: int, turns: list[db.Turn],
     for label, (total, clean, n) in sorted(by_label.items(), key=lambda item: -item[1][0]):
         print(f"{label:12} {n:>5} {total / 60000:>7.1f} {clean / 60000:>6.1f}  {describe_label(labels, label)}")
     print(f"\nclean = minutes in turns of at least {sp.MIN_TURN_MS // 1000} s with little overlapped speech.")
-    print(f"Listen to one: python3.11 listen_speaker.py {content.id} <label>   (diarization {diarization_id})")
+    print(f"Listen to one: python3.11 speakers/listen_speaker.py {content.id} <label>   (diarization {diarization_id})")
 
 
 def cut_clip(wav_path: Path, turns: list[db.Turn], clip_path: Path, gap_s: float = 0.7) -> None:

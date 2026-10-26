@@ -1,11 +1,11 @@
-"""How well identify_speakers.py names the labels that a human set (enroll_speaker.py --label),
-for a few thresholds: run it to choose identify_speakers.py --threshold, and again after every
+"""How well speakers/identify_speakers.py names the labels that a human set (speakers/enroll_speaker.py --label),
+for a few thresholds: run it to choose speakers/identify_speakers.py --threshold, and again after every
 change of the embedding model or of its server image.
 
-    python3.11 evaluate_speakers.py
-    python3.11 evaluate_speakers.py --thresholds 0.4 0.5 0.6 0.7
+    python3.11 speakers/evaluate_speakers.py
+    python3.11 speakers/evaluate_speakers.py --thresholds 0.4 0.5 0.6 0.7
 
-Each human-labelled label is identified as identify_speakers.py would, but against speaker voices
+Each human-labelled label is identified as speakers/identify_speakers.py would, but against speaker voices
 computed without the samples of its own content (leave one content out). The right answer is the
 human's speaker when that speaker also has samples in other contents, and "unknown" otherwise
 (e.g. a speaker labelled in one content only). A speaker labelled in at least 2 contents is
@@ -13,7 +13,13 @@ needed to measure anything but false names.
 """
 
 import argparse
+import os
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 import helpers.speakers as sp
@@ -33,7 +39,7 @@ def main() -> int:
 JOIN diarizations d ON d.id = l.diarization_id WHERE l.source = 'human' ORDER BY d.content_id, l.speaker"""
         ).fetchall()
         if not labelled:
-            sys.exit("No label set by a human: label some with enroll_speaker.py --label first")
+            sys.exit("No label set by a human: label some with speakers/enroll_speaker.py --label first")
         names = dict(db_conn.execute("SELECT id, name FROM speakers"))
         for diarization_id, content_id, label, truth in labelled:
             voice = sp.label_voices(db_conn, diarization_id, model).get(label)

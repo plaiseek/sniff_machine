@@ -43,7 +43,7 @@ def default_model(db_conn) -> str:
     models = db.get_turn_embedding_models(db_conn)
     if len(models) != 1:
         raise SystemExit(
-            "No turn embeddings: run embed_speaker_turns.py first" if not models
+            "No turn embeddings: run pipeline/embed_speaker_turns.py first" if not models
             else f"Turn embeddings of several models {models}: choose one with --model"
         )
     return models[0]

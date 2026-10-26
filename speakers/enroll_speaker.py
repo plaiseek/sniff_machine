@@ -1,12 +1,12 @@
-"""Name a speaker from reference samples of their voice (for identify_speakers.py).
+"""Name a speaker from reference samples of their voice (for speakers/identify_speakers.py).
 
-    python3.11 enroll_speaker.py NAME CONTENT_ID --label SPEAKER_01      # a diarization label is NAME
-    python3.11 enroll_speaker.py NAME CONTENT_ID 12.5 19 1:02:03 1:02:15  # ranges where only NAME talks
-    python3.11 enroll_speaker.py --forget NAME                           # delete NAME and all that names them
+    python3.11 speakers/enroll_speaker.py NAME CONTENT_ID --label SPEAKER_01      # a diarization label is NAME
+    python3.11 speakers/enroll_speaker.py NAME CONTENT_ID 12.5 19 1:02:03 1:02:15  # ranges where only NAME talks
+    python3.11 speakers/enroll_speaker.py --forget NAME                           # delete NAME and all that names them
 
-With --label (listen to it first with listen_speaker.py), the label's clean turns (at least 3 s,
+With --label (listen to it first with speakers/listen_speaker.py), the label's clean turns (at least 3 s,
 little overlapped speech) become samples of NAME, with the embeddings already computed for them
-(embed_speaker_turns.py), and the label is set to NAME (source 'human', which identification never
+(pipeline/embed_speaker_turns.py), and the label is set to NAME (source 'human', which identification never
 replaces). Uses the latest diarization of the content unless --diarization is given.
 
 Ranges are START END pairs, in seconds or [H:]MM:SS[.s], of at least 1 s (3 s or more is better):
@@ -17,7 +17,13 @@ Older copies of the database in cache/backups/ still hold them.
 """
 
 import argparse
+import os
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 import helpers.speakers as sp
@@ -40,7 +46,7 @@ def enroll_label(db_conn, speaker_name: str, content: db.Content, label: str, di
     if not clean:
         sys.exit(f"{label} has no clean turn (at least {sp.MIN_TURN_MS // 1000} s, little overlap): give ranges instead")
     if any(blob is None for _, blob in clean):
-        sys.exit(f"Some turns of diarization {diarization_id} have no {model} embedding: run embed_speaker_turns.py first")
+        sys.exit(f"Some turns of diarization {diarization_id} have no {model} embedding: run pipeline/embed_speaker_turns.py first")
 
     speaker_id = db.add_speaker(db_conn, speaker_name)
     samples = [(turn.start_ms, turn.end_ms, sp.to_vector(blob).tolist()) for turn, blob in clean]

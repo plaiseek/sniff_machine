@@ -1,4 +1,4 @@
-"""ask_transcripts.py's question step against the fake vLLM server, on a made-up content in a
+"""explore/ask_transcripts.py's question step against the fake vLLM server, on a made-up content in a
 database of its own (no GPU, no network).
 
     python3.11 -m unittest discover tests

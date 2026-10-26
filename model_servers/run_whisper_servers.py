@@ -1,4 +1,13 @@
-from helpers.whisper_amd_server import *
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
+
+import helpers.docker as dk
+from helpers.whisper_amd_server import build_whisper_image, run_whisper_container, stop_all_whisper_containers
 
 stop_all_whisper_containers()
 

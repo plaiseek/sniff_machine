@@ -1,8 +1,8 @@
-"""Name the labels of the diarizations after the enrolled speakers (enroll_speaker.py).
+"""Name the labels of the diarizations after the enrolled speakers (speakers/enroll_speaker.py).
 
-    python3.11 identify_speakers.py                    # every diarization with embedded turns
-    python3.11 identify_speakers.py 243 418            # only these contents
-    python3.11 identify_speakers.py --dry-run          # print, store nothing
+    python3.11 speakers/identify_speakers.py                    # every diarization with embedded turns
+    python3.11 speakers/identify_speakers.py 243 418            # only these contents
+    python3.11 speakers/identify_speakers.py --dry-run          # print, store nothing
 
 Each label's voice (the duration-weighted mean of its clean turns: at least 3 s, little overlapped
 speech) is compared with each speaker's voice (the mean of their samples). The closest speaker
@@ -12,11 +12,17 @@ and labels without clean turns are left out. Re-run it after enrolling someone.
 
 The default threshold is provisional: on the first real data (5 videos of one channel), the
 voices of one person in different videos scored 0.90-0.95 and different people at most 0.45.
-Calibrate it with evaluate_speakers.py once a few speakers are labelled.
+Calibrate it with speakers/evaluate_speakers.py once a few speakers are labelled.
 """
 
 import argparse
+import os
 import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
 
 import helpers.database as db
 import helpers.speakers as sp
@@ -36,7 +42,7 @@ def main() -> int:
         model = args.model or sp.default_model(db_conn)
         speakers = sp.speaker_voices(db_conn, model)
         if not speakers:
-            sys.exit(f"No speaker has samples with {model} embeddings: enroll someone with enroll_speaker.py first")
+            sys.exit(f"No speaker has samples with {model} embeddings: enroll someone with speakers/enroll_speaker.py first")
         query = """SELECT d.id, d.content_id FROM diarizations d
 WHERE EXISTS (SELECT 1 FROM turns t JOIN turn_embeddings e ON e.turn_id = t.id AND e.model = ? WHERE t.diarization_id = d.id)"""
         params = [model]
@@ -45,7 +51,7 @@ WHERE EXISTS (SELECT 1 FROM turns t JOIN turn_embeddings e ON e.turn_id = t.id A
             params += args.content_ids
         diarizations = db_conn.execute(query + " ORDER BY d.content_id, d.id", params).fetchall()
         if not diarizations:
-            sys.exit("No diarization with embedded turns: run embed_speaker_turns.py first")
+            sys.exit("No diarization with embedded turns: run pipeline/embed_speaker_turns.py first")
         print(f"{len(speakers)} speakers ({', '.join(name for name, _ in speakers.values())}), threshold {args.threshold}, {model}")
 
         counts = {"named": 0, "unknown": 0, "human": 0, "no clean turn": 0}

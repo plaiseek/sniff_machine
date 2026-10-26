@@ -1,11 +1,17 @@
-from helpers.pipeline import embedding_step, run_steps
+import os
+import sys
+from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
+
+from helpers.pipeline import embedding_step, run_steps
 import helpers.database as db
 import servers
-import sys
 
 # Voice embeddings of the exclusive turns of every diarization, from the SpeechBrain servers
-# listed in servers.py. Run it after diarize_contents.py (or a job that diarizes): only the turns
+# listed in servers.py. Run it after pipeline/diarize_contents.py (or a job that diarizes): only the turns
 # without an embedding for the servers' model are sent.
 step = embedding_step(servers.SPEECHBRAIN_SERVERS)
 with db.connect() as db_conn:

@@ -59,7 +59,7 @@ For a relative period, do not compute the dates yourself: run the script below a
 Skip this step when `STEPS` is only `["download"]`. Otherwise run, with only the steps you need:
 
 ```bash
-python3.11 check_servers.py transcribe diarize embed split
+python3.11 model_servers/check_servers.py transcribe diarize embed split
 ```
 
 Every line must say `OK`, `BUSY` or `LOADING`. If a line says `DOWN`, stop and tell the user which address is down: the servers run on the GPU machines (see the `model-servers` skill). Do not edit `servers.py` unless the user gives you new addresses.

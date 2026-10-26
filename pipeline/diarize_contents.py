@@ -1,9 +1,15 @@
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+os.chdir(ROOT)  # the database and cache/ paths are relative to the repository root
+sys.path.insert(0, str(ROOT))
+
 from helpers.pipeline import diarization_step, run_steps
 from helpers.transcripts import update_transcripts
-
 import helpers.database as db
 import servers
-import sys
 
 # Passed to pyannote: {} lets it find the number of speakers, or e.g. {"num_speakers": 2},
 # {"min_speakers": 2, "max_speakers": 6}. A content is diarized once per (model, params).

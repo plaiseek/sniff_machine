@@ -1,4 +1,4 @@
-"""Questions asked to an LLM about the transcriptions, and what it found (ask_transcripts.py).
+"""Questions asked to an LLM about the transcriptions, and what it found (explore/ask_transcripts.py).
 Import them through helpers.database (import helpers.database as db)."""
 
 import sqlite3
