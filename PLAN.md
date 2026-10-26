@@ -9,7 +9,7 @@ What is still to do. The review of October 2026, with its findings, the design o
 - **One SQLite DB as the single source of truth**, with idempotent "already in DB → skip" steps.
 - **One self-contained module per model server** (Dockerfile + server code + build/run/stop functions), a matching `*_client.py` and a tiny `run_*_servers.py`. It is easy to add a server by copying one.
 - **Stateless HTTP model servers** with strict `accepted_params` validation. Clients get clear 400s.
-- **sqlite-vec is already loaded** (`helpers/database.py:13-15`). That's the right tool for voice embeddings.
+- **sqlite-vec is already loaded** (`connect()` in `helpers/database.py`). That's the right tool for voice embeddings.
 - **A 16 kHz mono wav per content** (`helpers/ffmpeg.py`) is the right canonical input for pyannote, SpeechBrain and Whisper. It just needs to actually be used everywhere.
 
 ## Conventions to adopt (keep the repo simple as it grows)
@@ -27,7 +27,7 @@ What is still to do. The review of October 2026, with its findings, the design o
 
 | # | Action | Why |
 |---|---|---|
-| 0.1 | Move the DB out of the disposable cache: `cache/test.db` → `data/sniff.db` (`helpers/database.py:7`). Run `PRAGMA wal_checkpoint(TRUNCATE)` first, or copy with `VACUUM INTO`. | `rm -rf cache` to free disk would delete the only non-recomputable data: speaker names, enrollments, human corrections. |
+| 0.1 | Move the DB out of the disposable cache: `cache/test.db` → `data/sniff.db` (`db_path` in `helpers/database.py`). Run `PRAGMA wal_checkpoint(TRUNCATE)` first, or copy with `VACUUM INTO`. | `rm -rf cache` to free disk would delete the only non-recomputable data: speaker names, enrollments, human corrections. |
 | 0.2 | Add a ~10-line `backup_db.py`: `VACUUM INTO 'backups/sniff-<timestamp>.db'` (safe while other connections are open). Call it before every migration. | The Phase 3 migrations rebuild tables. |
 | 0.3 | Record the **working** image configuration: `docker image inspect rocm/pytorch:latest --format '{{index .RepoDigests 0}}'`; `docker run --rm --entrypoint pip amd_pyannote:latest freeze > helpers/constraints_pyannote.txt` (same for `amd_wtpsplit`); `docker run --rm --entrypoint git amd_whisper:latest -C /app rev-parse HEAD`. | docker-py does not re-pull `latest` when a local copy exists, so your working pyannote image was built from a *cached* base. `latest` on Docker Hub has moved on, and `torchcodec v0.10.0` (`pyannote_amd_server.py:7`) only matches the torch it was built against. A fresh machine or a `docker system prune` will break the build, and the digest you have now cannot be recovered afterwards. |
 

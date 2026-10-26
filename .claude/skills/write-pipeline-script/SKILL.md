@@ -94,7 +94,7 @@ print(f"Wrote {OUTPUT} ({len(contents)} contents of '{UPLOADER}')")
 
 - Every step is idempotent: check what is stored before computing, store (and register files) only after success. Re-running a script must resume, never redo or duplicate.
 - Paths are relative to the repository root and live under `cache/<file_type>/<platform>_<external_id>.<ext>`.
-- Write to the database only through `helpers.database` functions. **Never** `DELETE`, `UPDATE` or `DROP` by hand, and never change the schema: a new table needs a new entry appended to `MIGRATIONS` in `helpers/database.py`; ask the user before adding one.
+- Write to the database only through `helpers.database` functions. **Never** `DELETE`, `UPDATE` or `DROP` by hand, and never change the schema: a new table needs a new entry appended to `MIGRATIONS` in `helpers/migrations.py` (its queries go in a module of `helpers/tables/`, which `helpers/database.py` re-exports); ask the user before adding one.
 - Never delete or move `cache/`, `cache/test.db` or `cache/backups/`.
 - Long scripts print one line per content with a `(i/n)` prefix and end with a summary of failures, then exit with 1 if anything failed.
 

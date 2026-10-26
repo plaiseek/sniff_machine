@@ -10,7 +10,7 @@ Sniff Machine downloads videos and audios (YouTube, Twitch, French TV and radio,
 | `jobs/*.py` | jobs created from the template (one per request) |
 | `*.py` at the root | one script per feature (`diarize_contents.py`, `transcript_pending_audios.py`, `run_*_servers.py`, ...) |
 | `servers.py` | addresses of the model servers; `check_servers.py` checks them |
-| `helpers/` | shared code: `database.py` (schema, migrations, queries), `pipeline.py` (steps run on the servers), `jobs.py`, `yt_dlp.py`, one client and one server module per model |
+| `helpers/` | shared code: `database.py` (`connect()`, and every query re-exported: `import helpers.database as db`), `migrations.py` (the schema), `tables/` (the queries, by group of tables), `pipeline.py` (steps run on the servers), `jobs.py`, `yt_dlp.py`, one client and one server module per model |
 | `cache/` | the database and every downloaded or computed file |
 | `criteria/` | criteria files for `ask_transcripts.py --criteria` (e.g. hateful speech under French law) |
 | `tests/` | tests without GPU, network or Docker: `python3.11 -m unittest discover tests` |
