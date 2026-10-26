@@ -90,7 +90,7 @@ class Report:
 def transcription_step(whisper_servers: list[str], language: str = "fr") -> Step:
     from helpers.whisper_client import assert_whisper_servers, wav_to_whisper_result
 
-    assert_whisper_servers(whisper_servers)
+    whisper_servers = assert_whisper_servers(whisper_servers)
 
     def is_done(db_conn, content):
         return db.get_existing_content_file(db_conn, content.id, "whisper_result") is not None
@@ -109,7 +109,7 @@ def transcription_step(whisper_servers: list[str], language: str = "fr") -> Step
 def diarization_step(pyannote_servers: list[str], params: dict | None = None) -> Step:
     from helpers.pyannote_client import assert_pyannote_servers, diarize_content
 
-    model = assert_pyannote_servers(pyannote_servers)
+    model, pyannote_servers = assert_pyannote_servers(pyannote_servers)
 
     def is_done(db_conn, content):
         return db.get_diarization_id(db_conn, content.id, model, params) is not None
@@ -126,7 +126,7 @@ def embedding_step(speechbrain_servers: list[str]) -> Step:
     not diarized yet has nothing to embed, so it counts as done)."""
     from helpers.speechbrain_client import assert_speechbrain_servers, embed_content_turns
 
-    model = assert_speechbrain_servers(speechbrain_servers)
+    model, speechbrain_servers = assert_speechbrain_servers(speechbrain_servers)
 
     def is_done(db_conn, content):
         return not db.get_unembedded_turns(db_conn, content.id, model)
@@ -144,7 +144,7 @@ def sentence_step(wtpsplit_servers: list[str]) -> Step:
     from helpers.transcripts import split_sentences
     from helpers.wtpsplit_client import assert_wtpsplit_servers
 
-    model = assert_wtpsplit_servers(wtpsplit_servers)
+    model, wtpsplit_servers = assert_wtpsplit_servers(wtpsplit_servers)
 
     def is_done(db_conn, content):
         return db.sentences_done(db_conn, content.id, model)

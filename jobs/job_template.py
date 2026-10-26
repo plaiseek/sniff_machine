@@ -3,8 +3,8 @@
 Copied from jobs/job_template.py: only the settings below were edited. Run it from the repository
 root with `python3.11 jobs/<this file>.py` (`--status` only says whether it is running). Re-running it
 resumes: what is already in the database is skipped. Exit codes: 0 done, 1 some contents failed
-(re-run to retry them), 2 invalid settings, 3 already running, 4 a server is not ready, 5 a server
-is probably stuck (it needs a restart).
+(re-run to retry them), 2 invalid settings, 3 already running, 4 no server of a step can
+be used, 5 a server is probably stuck (it needs a restart).
 """
 
 # ======================== Settings: edit only these lines ========================

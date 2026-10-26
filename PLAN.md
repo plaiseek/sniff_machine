@@ -38,7 +38,16 @@ Status: 0.2 is done another way: `connect()` backs the database up in `cache/bac
 - **Phase 3:** the `failures` table (3.2); the 3.3 helpers (repo-root paths, `upsert_content`, `contents_needing`); the contents ingested before migration v2 have no `channel_id` or `series` (all 469 of them in October 2026): backfill them from their `ytdlp_info` JSON before grouping speakers per channel.
 - **Phase 5:** the speaker-count error of 5.5 (it needs the true number of speakers per content); linking unknown voices across a channel's contents; the privacy and legal scope of voiceprints (GDPR art. 9) before publishing anything that names speakers.
 - **Phase 6:** snapping words just outside a turn; tuning SaT's threshold for the long unpunctuated stretches; matplotlib under python3.11 needs Pillow for 3.11.
-- **LLM questions:** compare the recall of the windows with a whole-transcript prompt, and tune the window size; check the first pass's recall with the criteria; `meets`/`against` as columns (migration v8) if they need filtering; an export (CSV) of the findings for a lawyer; prompts that reach a prefix-cache block (1,648 tokens with Qwen3.8-27B).
+- **LLM questions:** compare the recall of the windows with a whole-transcript prompt, and tune the window size; check the first pass's recall with the criteria; `meets`/`against` as columns (migration v8) if they need filtering; prompts that reach a prefix-cache block (1,648 tokens with Qwen3.8-27B). The export for a lawyer is done (`--export`, the `findings-dossier` skill). The hard-end estimate (7.1 tokens written per word) is an average: single contents with passages to check wrote up to 8.6. `--dry-run` stores the words of new transcriptions (it needs them to count). A stuck vLLM ends in exit 1, not 5: its requests time out after 1 h, and "stuck" needs 24 h. The `--schema` comment of `findings.attribution` lists 3 of the 5 values (next migration).
+
+## Found by the skill check of 2026-10-26 (servers on one machine)
+
+- **whisper.cpp v1.9.5 answers HTTP 500** to `/inference` when its VAD finds no speech (container log: `Final speech segments after filtering: 0`, then `unknown language id -2`); a retry can return an empty transcription. Seen on content 465 (24 s, 3.9 s of speech by Pyannote). The client could treat it as an empty transcription, or the language detection could be skipped when `language` is given.
+- **One 16 GB GPU for every server is too small**: with 2 Whisper large-v3 + Pyannote + SpeechBrain + wtpsplit on the RX 7900 GRE, about 14.3 GiB are used at rest and SpeechBrain runs out of memory (`GPU out of memory: lower 'batch_size' or 'max_duration'`): content 167 has no voice embeddings yet. Run one Whisper on such a card, or cap the servers' PyTorch memory.
+- **Correcting speaker names**: no script records "this label is nobody I know" or a wrong name (the schema supports a human label with no speaker), and none finds an unnamed voice in other contents before it is named (`speakers/similar_labels.py CONTENT LABEL`, naming no one).
+- A live or upcoming `CONTENT_URLS` entry is an error (exit 1), while in a listing it is skipped without one.
+- A job's `--status` takes the job's lock for an instant: a job started at that instant stops with exit code 3.
+- Rebuilding the Whisper image left the old one (33 GB) dangling: `docker system df` shows about 18 GB reclaimable (the user's decision).
 
 ## Phase 7 — Sources and scheduled runs (README TODO 1, M)
 

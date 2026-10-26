@@ -5,7 +5,8 @@ or splits also stores the words of the transcriptions in the database, with thei
 Job scripts (jobs/*.py, copied from jobs/job_template.py) only hold settings and call run_job().
 
 Exit codes: 0 everything done, 1 some contents failed (re-run the job to retry them),
-2 invalid settings, 3 the same job is already running, 4 a server needed by a step is down.
+2 invalid settings, 3 the same job is already running, 4 no server of a step can be used (none
+answers, all busy too long, or they run different models), 5 a server is probably stuck.
 """
 
 import datetime
@@ -118,7 +119,7 @@ EXIT_CODES = {
     1: "some contents failed: run the job again to retry them",
     2: "invalid settings, nothing done",
     3: "this job is already running",
-    4: "a server is not ready, nothing done",
+    4: "no server of a step can be used (see the line above), nothing done",
     5: "a server is probably stuck (see above): tell the user, it needs a restart, do not run the job again before",
 }
 
@@ -176,7 +177,7 @@ def _run_job(
         print(f"{job_path.name} is already running: wait for it to finish (its log ends with 'Job finished').")
         return 3
 
-    # Fail fast, before any download, if a server needed by a step is down
+    # Fail fast, before any download, if no server of a step answers (the others are left out)
     gpu_steps = []
     embedding = splitting = None
     if not dry_run:
@@ -190,7 +191,7 @@ def _run_job(
             if "split" in steps:
                 splitting = sentence_step(servers.WTPSPLIT_SERVERS)
         except SystemExit as e:  # the client's server check failed
-            print(f"{e.code}\nNothing done: a server needed by the steps is not ready (see model_servers/check_servers.py).")
+            print(f"{e.code}\nNothing done: no server of a step can be used (see model_servers/check_servers.py).")
             return 4
 
     skipped = []  # (url, reason, is_error): listing entries or URLs left out

@@ -12,7 +12,7 @@ from helpers.whisper_amd_server import build_whisper_image, run_whisper_containe
 stop_all_whisper_containers()
 
 # gpu_instances = {0: [8070, 8071, 8072], 1: [8073, 8074, 8075]}
-# build_whisper_docker_image(gfx_version="12.0.1")
+# build_whisper_image(gfx_version="12.0.1")
 
 gpu_instances = {0: [8070, 8071]}
 build_whisper_image(gfx_version="11.0.0")

@@ -4,38 +4,25 @@ from typing import NamedTuple
 import json
 import math
 import os
-import requests
 import statistics
-import sys
-import time
 
+from helpers.health import ready_servers
 from helpers.uploads import post_wav
 
 
-def assert_whisper_servers(addresses: list, loading_timeout_s: float = 600):
-    """Exit if a server is down. A server loading a model (503, e.g. during a POST /load) is waited
-    for, up to loading_timeout_s. A server that is starting is down: whisper.cpp only opens its
-    port once its model is loaded."""
-    if not addresses:
-        sys.exit("No Whisper server is listed in servers.py (WHISPER_SERVERS)")
-    for address in addresses:
-        # whisper.cpp serves /health: {"status":"ok"}, or 503 while the model is loading
-        url = f"http://{address}/health"
-        print(f"Checking {url}...")
-        deadline = time.monotonic() + loading_timeout_s
-        while True:
-            try:
-                r = requests.get(url, timeout=5)
-                if r.status_code == 503 and time.monotonic() < deadline:
-                    print(f"Whisper server {address} is loading its model, waiting...", flush=True)
-                    time.sleep(10)
-                    continue
-                r.raise_for_status()
-                if r.json().get("status") != "ok":
-                    raise ValueError(f"Unexpected Whisper.cpp response: {r.text}")
-                break
-            except (requests.exceptions.RequestException, ValueError) as e:
-                sys.exit(f"Whisper server {address} is not ready: {e}")
+def assert_whisper_servers(addresses: list) -> list[str]:
+    """The listed servers that answer: the others are left out with a warning (see helpers/health.py);
+    exits if none does. A server loading another model (503, during a POST /load) is kept: work sent
+    to it waits. A server that is starting is down: whisper.cpp only opens its port once its model
+    is loaded."""
+
+    def model_of(answer):
+        # whisper.cpp serves /health: {"status":"ok"}, and does not say which model it runs
+        if answer.get("status") != "ok":
+            raise ValueError(f"Unexpected Whisper.cpp response: {answer}")
+        return None
+
+    return ready_servers("Whisper", addresses, "WHISPER_SERVERS", model_of)[1]
 
 
 supported_params = [

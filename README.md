@@ -18,6 +18,7 @@ Run every script from the repository root, as `python3.11 <folder>/<script>.py`:
 | [admin/](admin/) | create the database, restore a backup |
 | [helpers/](helpers/) | the shared code: the database (`database.py`, `migrations.py`, `tables/`), the steps (`pipeline.py`, `jobs.py`), yt-dlp, and one client and one server module per model |
 | [criteria/](criteria/), [tests/](tests/), [docs/](docs/) | criteria for the LLM questions, tests, the media to add and the October 2026 review |
+| `exports/` | what is exported to hand over (e.g. `explore/ask_transcripts.py --export`): ignored by git |
 
 ### Database
 
@@ -107,6 +108,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
    ```bash
    python3.11 model_servers/check_servers.py              # OK / BUSY / LOADING / DOWN for each server
    ```
+   List every machine that may run servers: a step leaves out the servers that do not answer when it starts (with a warning), and stops only when none of its servers answers.
 
 4. **Run a job**: copy [jobs/job_template.py](jobs/job_template.py) to `jobs/<name>.py`, edit its settings (channels or playlists to list, single URLs, upload dates, steps), then:
    ```bash
@@ -153,9 +155,11 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 8. **Ask an LLM where something is said** (a vLLM server, see above), when no fixed words find it:
    ```bash
    python3.11 explore/ask_transcripts.py "Où parle-t-on de la mairie de Paris ?" --uploader Psyhodelik --dry-run   # how much it reads, how long it takes
-   nohup python3.11 explore/ask_transcripts.py "Quels propos pourraient être poursuivis comme discours de haine selon la loi du 29 juillet 1881 ?" \
-       --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from 2025-10-26 > ask.log 2>&1 &   # the last year (see below)
+   nohup python3.11 -u explore/ask_transcripts.py "Quels propos pourraient être poursuivis comme discours de haine selon la loi du 29 juillet 1881 ?" \
+       --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from 2025-10-26 > ask.log 2>&1 &   # a year back from 2026-10-26 (see below; .claude/skills/pipeline-job/dates.py last-365-days gives today's date)
    python3.11 explore/ask_transcripts.py "Quels propos ..." --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from 2025-10-26 --show
+   python3.11 explore/ask_transcripts.py "Quels propos ..." --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from 2025-10-26 --show \
+       --export exports/2026-10-26_psyhodelik_haine   # findings.md, findings.csv, question.txt and an mp3 clip of each passage, for a lawyer
    ```
    It reads each transcription in windows of about 5,000 words (30 min) with times and speakers, and lists the passages that may match (first pass, no thinking), then checks each one with 600 words around it (second pass, the model thinks first): the matching sentences and a quote, what the speaker does with these words (own words, approving what they quote or read, quoting or reading without a stance, quoting to criticize), what of the question it meets (`Meets:`), what speaks against it (`Against:`), why, the verdict (`yes`, `unsure`, `no`) and a confidence. [criteria/haine_loi_1881.txt](criteria/haine_loi_1881.txt) defines hateful speech under French press law, to find leads for a lawyer: `Meets:` gives the offence, the group targeted and the protected criterion, `Against:` what a defence could object. These offences are prescribed one year after publication (to be confirmed by the lawyer), hence `--uploaded-from` a year back. The criteria are part of the question: editing them asks everything again, so have them checked before a long run. Each vLLM server gets `--clients` requests at once (default 8, where it is most efficient), never needing more than `--kv-tokens` of KV cache (default 440,000), the contents that started first going first; `--tokens-per-s` (default 300) gives the dry run's time estimate, and each content's line gives the speed measured and the time left. The LLM cites sentence numbers, never times: they are mapped back to the words, with a link to each moment. `--criteria FILE` adds a precise definition of what matches to the question; `--speaker` keeps the sentences of the labels named so. Asked again, it only reads the contents not read yet (or diarized since); a new question, criteria, speaker, model or prompt version reads everything again. The whole Psyhodelik channel (1.47 M words) is about 2.9 M tokens read by the first pass, and 2.6 to 10.5 M tokens written by both passes (the hateful-speech criteria are the high end, about 7 tokens per word: many passages to check, with thinking): about 2.5 to 10 h at 300 tokens/s, plus the reading. The answers are leads to listen to, not verdicts.
 
@@ -175,11 +179,14 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 | [ask-transcripts](.claude/skills/ask-transcripts/SKILL.md) | "when does X say something hateful about a group?", "find the passages that could be prosecuted", "where does he talk about the police?": asks the LLM with a dry run and the user's go-ahead first, then reports the leads |
 | [speaker-identity](.claude/skills/speaker-identity/SKILL.md) | "who is SPEAKER_01 in video 243?", "SPEAKER_00 of video 418 is Jean Dupont, find him in the other videos" (the agent never names anyone itself) |
 | [model-servers](.claude/skills/model-servers/SKILL.md) | checking, starting or stopping the model servers |
+| [findings-dossier](.claude/skills/findings-dossier/SKILL.md) | "prepare the passages found for my lawyer": exports the findings of a question with a clip of each passage, and reports what the folder holds |
+| [work-status](.claude/skills/work-status/SKILL.md) | "what is running?", "did last night's job work?", "how much disk space is left?" (read-only) |
 | [write-pipeline-script](.claude/skills/write-pipeline-script/SKILL.md) | anything the job template cannot do: a custom selection, a new step, an export |
+| [check-skills](.claude/skills/check-skills/SKILL.md) | "check that every skill still works after this change": tests, a review of each skill against the code, a real run of each on short contents |
 
 - Claude Code loads `.claude/skills/` and `CLAUDE.md`. Agents that follow the open Agent Skills convention (Codex, Gemini CLI, Cursor, Copilot, OpenCode, goose...) find the same skills through the `.agents/skills` link, and `GEMINI.md` imports `AGENTS.md` for Gemini CLI. Any other agent can simply be told to read `AGENTS.md` first.
 - In Claude Code, [.claude/hooks/protect_data.py](.claude/hooks/protect_data.py) (registered in [.claude/settings.json](.claude/settings.json)) blocks the usual ways an agent could destroy `cache/test.db` or `cache/backups/`: deleting, moving or copying over them (also from inside `cache/`), `git clean` with `-x`, any use of the `sqlite3` command line on the database without `-readonly`, and `speakers/enroll_speaker.py --forget`.
-- The skills were tested with a small model on sandbox copies of the repository, with fake servers and fake channels: requests in English and French, relative dates ("la semaine dernière"), re-diarization with a speaker count, a server down, an ambiguous date (the agent asks), a failing content (retried once, then reported), single URLs, questions on the database and an export script. A local model (e.g. through `ollama launch`) needs a context of at least 64k tokens to hold a skill and a job's output.
+- The skills were tested with a small model on sandbox copies of the repository, with fake servers and fake channels: requests in English and French, relative dates ("la semaine dernière"), re-diarization with a speaker count, a server down, an ambiguous date (the agent asks), a failing content (retried once, then reported), single URLs, questions on the database and an export script. On 2026-10-26 each skill was also run end to end on the real database, with the model servers on one machine (the `check-skills` skill). A local model (e.g. through `ollama launch`) needs a context of at least 64k tokens to hold a skill and a job's output.
 
 ## Tests
 
@@ -187,7 +194,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 python3.11 -m unittest discover tests
 ```
 
-No GPU, network or Docker needed: the migrations on a database of their own, and `explore/ask_transcripts.py`'s question step against a fake vLLM server ([tests/fake_vllm.py](tests/fake_vllm.py)): requests at once, the KV-cache limit, a window cut then read in halves, an empty answer asked again, an error that cancels the rest, resuming.
+No GPU, network or Docker needed: the migrations on a database of their own, the choice of the model servers that answer (fake `/health` servers), and `explore/ask_transcripts.py`'s question step against a fake vLLM server ([tests/fake_vllm.py](tests/fake_vllm.py)): requests at once, the KV-cache limit, a window cut then read in halves, an empty answer asked again, an error that cancels the rest, resuming.
 
 ## Roadmap
 

@@ -75,13 +75,11 @@ def enroll_ranges(db_conn, speaker_name: str, content: db.Content, values: list[
     if short := [r for r in ranges if r[1] - r[0] < sp.MIN_TURN_MS]:
         print(f"Warning: ranges shorter than {sp.MIN_TURN_MS // 1000} s give less reliable embeddings: {short}")
 
-    model = assert_speechbrain_servers(servers.SPEECHBRAIN_SERVERS)
+    model, ready = assert_speechbrain_servers(servers.SPEECHBRAIN_SERVERS)
     wav_path = prepare_wav(db_conn, content)
-    result = wav_to_speechbrain_embeddings(
-        servers.SPEECHBRAIN_SERVERS[0], wav_path, [[start / 1000, end / 1000] for start, end in ranges]
-    )
+    result = wav_to_speechbrain_embeddings(ready[0], wav_path, [[start / 1000, end / 1000] for start, end in ranges])
     if result["model"] != model:
-        sys.exit(f"Server {servers.SPEECHBRAIN_SERVERS[0]} runs {result['model']}, not {model}")
+        sys.exit(f"Server {ready[0]} runs {result['model']}, not {model}")
     samples = [(start, end, embedding) for (start, end), embedding in zip(ranges, result["embeddings"])]
     if missing := [(start, end) for start, end, embedding in samples if embedding is None]:
         sys.exit(f"No embedding for {missing} (past the end of the audio?): nothing stored")

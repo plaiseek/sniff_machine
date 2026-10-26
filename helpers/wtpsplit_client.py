@@ -1,45 +1,14 @@
 import requests
-import sys
-import time
+
+from helpers.health import named_model, ready_servers
 
 
-def assert_wtpsplit_servers(addresses: list, busy_timeout_s: float = 600) -> str:
-    """Exit if a server is down. Returns the model the servers run (they must all run the same):
-    it is stored with the sentences. A server only answers /health between two requests (it has one
-    thread): busy servers are waited for (up to busy_timeout_s) until one answers."""
-    if not addresses:
-        sys.exit("No wtpsplit server is listed in servers.py (WTPSPLIT_SERVERS)")
-    models, busy = set(), []
-    for address in addresses:
-        url = f"http://{address}/health"
-        print(f"Checking {url}...")
-        try:
-            r = requests.get(url, timeout=5)
-            r.raise_for_status()
-            models.add(r.json()["model"])
-        except requests.exceptions.ReadTimeout:
-            busy.append(address)  # its only thread is splitting (or the model is still loading)
-        except (requests.exceptions.RequestException, ValueError, KeyError) as e:
-            sys.exit(f"Wtpsplit server {address} is not ready: {e}")
-    deadline = time.monotonic() + busy_timeout_s
-    while not models and busy:
-        if time.monotonic() > deadline:
-            sys.exit(f"No wtpsplit server answered /health within {busy_timeout_s:.0f} s (busy: {busy})")
-        print(f"Wtpsplit servers {busy} are busy or loading: waiting for one to answer...", flush=True)
-        time.sleep(10)
-        for address in busy:
-            try:
-                r = requests.get(f"http://{address}/health", timeout=5)
-                r.raise_for_status()
-                models.add(r.json()["model"])
-                break
-            except requests.exceptions.ReadTimeout:
-                pass
-            except (requests.exceptions.RequestException, ValueError, KeyError) as e:
-                sys.exit(f"Wtpsplit server {address} is not ready: {e}")
-    if len(models) > 1:
-        sys.exit(f"The wtpsplit servers run different models: {sorted(models)}")
-    return models.pop()
+def assert_wtpsplit_servers(addresses: list, busy_timeout_s: float = 600) -> tuple[str, list[str]]:
+    """(model, the listed servers that answer): the others are left out with a warning (see
+    helpers/health.py); exits if none does. The servers must all run the same model: it is stored
+    with the sentences. A server only answers /health between two requests (it has one thread):
+    busy servers are waited for (up to busy_timeout_s) until one answers."""
+    return ready_servers("wtpsplit", addresses, "WTPSPLIT_SERVERS", named_model, busy_timeout_s)
 
 
 def _post_split(wtpsplit_address: str, text_or_texts, timeout_s: float) -> dict:

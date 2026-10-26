@@ -3,54 +3,22 @@ from pathlib import Path
 
 import json
 import requests
-import sys
-import time
 
 import helpers.database as db
+from helpers.health import ready_servers
 from helpers.uploads import post_wav
 
 # What servers built before Phase 4 run (their answers do not name the model)
 DEFAULT_MODEL = "pyannote/speaker-diarization-community-1"
 
 
-def assert_pyannote_servers(addresses: list, busy_timeout_s: float = 600) -> str:
-    """Exit if a server is down. Returns the model the servers run (they must all run the same):
-    it is part of what makes a content "diarized", so it is never guessed. Images built before
-    Phase 4 cannot answer /health while they diarize: they are waited for (up to busy_timeout_s)."""
-    if not addresses:
-        sys.exit("No Pyannote server is listed in servers.py (PYANNOTE_SERVERS)")
-    models, busy = set(), []
-    for address in addresses:
-        url = f"http://{address}/health"
-        print(f"Checking {url}...")
-        try:
-            r = requests.get(url, timeout=5)
-            r.raise_for_status()
-            # Images built before Phase 4 only run the default model, and do not name it
-            models.add(r.json().get("model") or DEFAULT_MODEL)
-        except requests.exceptions.ReadTimeout:
-            busy.append(address)  # its only thread is diarizing (or the model is still loading)
-        except (requests.exceptions.RequestException, ValueError) as e:
-            sys.exit(f"Pyannote server {address} is not ready: {e}")
-    deadline = time.monotonic() + busy_timeout_s
-    while not models and busy:
-        if time.monotonic() > deadline:
-            sys.exit(f"No Pyannote server answered /health within {busy_timeout_s:.0f} s (busy: {busy})")
-        print(f"Pyannote servers {busy} are busy or loading: waiting for one to answer...", flush=True)
-        time.sleep(10)
-        for address in busy:
-            try:
-                r = requests.get(f"http://{address}/health", timeout=5)
-                r.raise_for_status()
-                models.add(r.json().get("model") or DEFAULT_MODEL)
-                break
-            except requests.exceptions.ReadTimeout:
-                pass
-            except (requests.exceptions.RequestException, ValueError) as e:
-                sys.exit(f"Pyannote server {address} is not ready: {e}")
-    if len(models) > 1:
-        sys.exit(f"The Pyannote servers run different models: {sorted(models)}")
-    return models.pop()
+def assert_pyannote_servers(addresses: list, busy_timeout_s: float = 600) -> tuple[str, list[str]]:
+    """(model, the listed servers that answer): the others are left out with a warning (see
+    helpers/health.py); exits if none does. The servers must all run the same model: it is part of
+    what makes a content "diarized", so it is never guessed. Images built before Phase 4 cannot
+    answer /health while they diarize: they are waited for (up to busy_timeout_s)."""
+    # Images built before Phase 4 only run the default model, and do not name it
+    return ready_servers("Pyannote", addresses, "PYANNOTE_SERVERS", lambda answer: answer.get("model") or DEFAULT_MODEL, busy_timeout_s)
 
 
 def wav_to_pyannote_result(

@@ -7,9 +7,10 @@
 Not part of the normal workflow. The Whisper large-v3 transcriptions are far better than automatic
 subtitles, and mixing subtitles into them would bias what is counted and searched: only subtitles
 written by people are fetched (never the platform's automatic ones), each stored as
-cache/ytdlp_subtitles/<platform>_<id>.<lang>.srt and registered as a `ytdlp_subtitles` file. They
-never become words or sentences in the database. Contents without such subtitles are listed, not
-failed.
+cache/ytdlp_subtitles/<platform>_<id>.<lang>.srt and registered as the content's `ytdlp_subtitles`
+file (one per content: fetching another language replaces the registration, the older file stays on
+disk). They never become words or sentences in the database. Contents without such subtitles are
+listed, not failed.
 """
 
 import argparse
