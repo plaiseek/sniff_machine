@@ -1,0 +1,28 @@
+Le but est de repérer des passages à faire examiner par un avocat, en vue d'une action en justice : ce n'est pas une analyse juridique.
+
+Cadre : droit pénal français de la presse (loi du 29 juillet 1881). Une vidéo publiée en ligne est une communication au public : ce qui y est dit ou lu est public.
+
+Un passage correspond s'il pourrait constituer l'une de ces infractions.
+
+A. Envers une personne ou un groupe de personnes à raison de leur origine, ou de leur appartenance ou non-appartenance à une ethnie, une nation, une race ou une religion déterminée, ou à raison de leur sexe, de leur orientation sexuelle, de leur identité de genre ou de leur handicap (les « critères protégés ») :
+1. Provocation à la discrimination, à la haine ou à la violence (art. 24) : des propos qui, par leur sens et leur portée, poussent le public à rejeter, haïr, exclure, discriminer ou violenter ce groupe, même sans appel explicite (par exemple en le présentant comme une menace, des parasites, des envahisseurs ou des ennemis à chasser).
+2. Diffamation (art. 32) : l'imputation d'un fait précis, qui pourrait être prouvé ou démenti, portant atteinte à l'honneur ou à la considération du groupe (par exemple imputer des crimes ou un comportement à tout un groupe à raison de son origine ou de sa religion).
+3. Injure (art. 33) : une expression outrageante, un terme de mépris ou une invective visant le groupe, sans imputer de fait précis.
+
+B. Quelle que soit la cible :
+4. Provocation directe à commettre des meurtres, des violences, des agressions sexuelles, des vols ou des destructions dangereuses pour les personnes (art. 24), même non suivie d'effet.
+5. Apologie de crimes contre l'humanité, de crimes de guerre ou de meurtres (art. 24), ou apologie du terrorisme (art. 421-2-5 du code pénal).
+6. Contestation, négation ou banalisation outrancière de crimes contre l'humanité, comme la Shoah (art. 24 bis).
+
+Ne correspondent pas, sauf si le contexte montre autre chose :
+- la critique d'une religion en tant que doctrine, d'une politique (par exemple d'immigration), d'un État ou d'un gouvernement, qui ne vise pas les personnes à raison de leur appartenance ;
+- les propos visant un groupe défini par ses opinions (« gauchistes », « racistes », un parti) ou par un comportement (« émeutiers », « casseurs », « délinquants ») ; ils correspondent si le contexte montre que ce mot désigne en fait un groupe d'une origine, d'une nationalité ou d'une religion ;
+- l'insulte ou la menace envers une seule personne qui n'est pas visée à raison d'un critère protégé (c'est une autre infraction, hors de cette recherche) ;
+- des faits, chiffres ou sondages rapportés sans généralisation ni mépris envers le groupe ;
+- des propos cités pour les condamner ou s'en moquer.
+
+Propos lus ou cités : lire à voix haute un message du chat, un tweet ou un article peut aussi être poursuivi, surtout si le locuteur l'approuve ou le reprend à son compte ; le citer pour le condamner ne l'est en général pas. L'attribution doit dire ce que fait le locuteur.
+
+Verdict : « yes » si un avocat pourrait fonder une poursuite sur ce passage ; « unsure » si l'une de ces infractions est plausible mais discutable (la cible, la posture du locuteur ou le sens des mots se discutent) : l'avocat tranchera ; « no » si aucune n'est plausible.
+
+Dans « meets », donne l'infraction (avec l'article), le groupe visé et le critère protégé, par exemple « Injure (art. 33) — les Algériens — origine, nation ». Dans « against », donne ce qu'une défense pourrait objecter : humour, ironie, exagération, débat d'intérêt général, critique d'idées et non de personnes, cible mal définie, propos d'un autre, transcription douteuse.

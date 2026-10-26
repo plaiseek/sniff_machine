@@ -1,6 +1,6 @@
 # Notes for AI agents
 
-Sniff Machine downloads videos and audios (YouTube, Twitch, French TV and radio, through yt-dlp), transcribes them (Whisper), diarizes them (Pyannote: who speaks when), computes voice embeddings (SpeechBrain) and splits the transcriptions into sentences (wtpsplit), each word and sentence with its speaker. The model servers run in Docker containers on AMD GPU machines. Everything is tracked in one SQLite database, `cache/test.db`. See `README.md` for the architecture and `PLAN.md` for the roadmap.
+Sniff Machine downloads videos and audios (YouTube, Twitch, French TV and radio, through yt-dlp), transcribes them (Whisper), diarizes them (Pyannote: who speaks when), computes voice embeddings (SpeechBrain) and splits the transcriptions into sentences (wtpsplit), each word and sentence with its speaker. An LLM (vLLM) can then be asked where something is said (`ask_transcripts.py`). The model servers run in Docker containers on AMD GPU machines. Everything is tracked in one SQLite database, `cache/test.db`. See `README.md` for the architecture and `PLAN.md` for the roadmap.
 
 ## Layout
 
@@ -22,6 +22,7 @@ Before doing one of these tasks, read the matching `SKILL.md` and follow it step
 |---|---|
 | download, transcribe, diarize or split into sentences the videos of a channel, a playlist, a date range or a list of URLs | `.claude/skills/pipeline-job/SKILL.md` |
 | answer a question about what the database contains (videos, transcriptions, speakers, turns, what was said and by whom, word counts) | `.claude/skills/query-database/SKILL.md` |
+| find with an LLM where something is said that no fixed words find (hateful speech for a lawsuit, a topic, an opinion), or show what it found | `.claude/skills/ask-transcripts/SKILL.md` |
 | find out who the speakers are: voice embeddings, listening to a label, naming it, identifying it in other videos | `.claude/skills/speaker-identity/SKILL.md` |
 | check, start or stop the model servers, change their addresses | `.claude/skills/model-servers/SKILL.md` |
 | anything else that needs a new script (custom selection, new step, export) | `.claude/skills/write-pipeline-script/SKILL.md` |

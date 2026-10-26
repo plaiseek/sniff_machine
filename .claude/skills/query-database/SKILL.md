@@ -1,6 +1,6 @@
 ---
 name: query-database
-description: Answers questions about what is stored in this repository's SQLite database (cache/test.db) - the downloaded videos and audios of a channel, their upload dates and durations, which ones are transcribed or diarized, the speakers and speaking turns of a video, who the speakers are once named, what was said and by whom, how often a word is said - with read-only SQL queries. Use for questions like "which videos of X are not diarized yet?", "how many speakers in video N?", "how long does SPEAKER_01 speak?", "how long does <name> speak in each video?", "who said 'mairie de Paris'?", "how many times does <name> say 'putain'?" (in French quelles vidéos, combien d'intervenants, temps de parole, qui a dit, combien de fois).
+description: Answers questions about what is stored in this repository's SQLite database (cache/test.db) - the downloaded videos and audios of a channel, their upload dates and durations, which ones are transcribed or diarized, the speakers and speaking turns of a video, who the speakers are once named, what was said and by whom, how often a word is said, what an LLM found when asked where something is said - with read-only SQL queries. Use for questions like "which videos of X are not diarized yet?", "how many speakers in video N?", "how long does SPEAKER_01 speak?", "how long does <name> speak in each video?", "who said 'mairie de Paris'?", "how many times does <name> say 'putain'?" (in French quelles vidéos, combien d'intervenants, temps de parole, qui a dit, combien de fois).
 ---
 
 # Query the database
@@ -30,6 +30,9 @@ Put values in `?` placeholders instead of writing them in the SQL text: `query.p
 | `words` | word said, in order | `content_id`, `idx` (0, 1, ...), `text` (as written: `l'histoire`, `compte.`, `?`), `norm` (lower case, no punctuation around: `compte`; `''` for `?`), `start_ms`, `end_ms`, `prob`, `turn_id` (the exclusive turn it falls in, NULL = none) |
 | `sentences` | sentence, never across two speakers | `id`, `content_id`, `first_idx`, `last_idx` (its words), `start_ms`, `end_ms`, `diarization_id`, `speaker` (the label), `text`, `splitter` (`sat-12l-sm`: wtpsplit; `punctuation`) |
 | `sentences_fts` | full-text index of `sentences.text` | search with `sentences_fts MATCH ?`, join `sentences s ON s.id = sentences_fts.rowid` |
+| `questions` | question asked to an LLM (`ask_transcripts.py`) | `id`, `text` (with its criteria), `speaker` (only the labels named so could match; `''` = anyone), `model`, `settings` (JSON) |
+| `question_contents` | content a question was asked on | `question_id`, `content_id`, `diarization_id` (the speakers it was shown), `windows`, `candidates`, `prompt_tokens`, `completion_tokens` |
+| `findings` | passage the LLM checked | `question_id`, `content_id`, `first_idx`, `last_idx` (its words), `start_ms`, `end_ms`, `speakers` (labels, comma-separated), `verdict` (`yes`, `unsure`, `no`), `confidence` (0 to 1), `attribution` (`own words`, `approves what they quote or read`, `quoting, reading or reporting` (no stance), `quotes to criticize`, `unclear`), `quote`, `quote_found` (0: the quote is not in the passage), `explanation` |
 
 Rules that avoid wrong answers:
 - A content is **downloaded** when it has a `16k_mono_wav` file, **transcribed** when it has a `whisper_result` file, **diarized** when it has a `diarizations` row.
@@ -39,6 +42,7 @@ Rules that avoid wrong answers:
 - **Who said it**: a word's speaker is the `speaker` of its turn (`turns.id = words.turn_id`), in the content's latest diarization; a sentence has its `speaker` and `diarization_id`. Name it through `speaker_labels` as above. About 5 % of the words fall between turns (`turn_id` NULL): say "about" when you give a speaker's word counts.
 - **Counting a word**: match `norm`, not `text`, and count rows. `norm` keeps accents and French elisions: use `norm REGEXP '(^|'')mots?$'` (`l'histoire` holds `histoire`), or `norm IN ('pipi', 'pipis')`. Word times are Whisper's token times: use `start_ms` (`end_ms` is often equal to it, sometimes before it).
 - **Searching a phrase**: `sentences_fts MATCH ?` ignores case and accents; values like `"mairie de paris"` (a phrase, with the double quotes), `pete*` (a prefix: péter, pété...), `knafo AND mairie`, `NEAR(knafo mairie, 5)`. Sentences exist only for the contents split with `split_sentences.py` (or a job with `"split"`); `sentences.splitter` says how.
+- **Where something is said that no fixed words find** ("when does he say something hateful about a group", "where does she criticise her party"): SQL cannot answer it; follow the `ask-transcripts` skill (an LLM reads the transcriptions). With SQL, the `findings` of a question it asked can be counted or filtered (the `explanation` ends with `Meets:` and `Against:` lines). Its findings are leads, like `auto` names: give the verdict and confidence, the link, and say they need to be listened to; never present them as facts about a person.
 - Upload dates are text: compare their first 10 characters, `substr(upload_date, 1, 10) BETWEEN '2026-03-01' AND '2026-03-31'`. `upload_date` can be NULL (unknown).
 - `uploader` is the channel name as the platform shows it; `channel_id` is the stable channel key (YouTube `UC...`), NULL for old contents.
 
@@ -117,7 +121,7 @@ SELECT c.uploader, COUNT(*) AS contents,
 FROM contents c GROUP BY c.uploader ORDER BY contents DESC
 ```
 
-Who said what in one content, as text (paragraphs per speaker, with times and links): run `python3.11 show_transcript.py CONTENT_ID [--from 10:00 --to 20:00] [--speaker SPEAKER_01 or a name]` instead of a query. Search across contents with links: `python3.11 search_transcripts.py "query" [--uploader X] [--speaker NAME]`.
+Who said what in one content, as text (paragraphs per speaker, with times and links): run `python3.11 show_transcript.py CONTENT_ID [--from 10:00 --to 20:00] [--speaker SPEAKER_01 or a name]` instead of a query. Search across contents with links: `python3.11 search_transcripts.py "query" [--uploader X] [--speaker NAME]`. What an LLM found for a question: `python3.11 ask_transcripts.py "question" [same selection] --show [--all]`.
 
 Who said a phrase (with the speaker's name when known):
 

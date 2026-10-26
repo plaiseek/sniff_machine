@@ -201,3 +201,13 @@ def build_sentences(runs: list[tuple[str | None, list[db.Word]]], starts_per_run
                 " ".join(word.text for word in in_sentence),
             ))
     return sentences
+
+
+def content_sentences(db_conn: sqlite3.Connection, content_id: int) -> list[tuple]:
+    """The sentences of a content, as db.get_sentences() gives them: those stored, or its words cut
+    on punctuation when none are (not split yet, see split_sentences.py)."""
+    sentences = db.get_sentences(db_conn, content_id)
+    if not sentences:
+        runs = speaker_runs(db.get_words_with_speakers(db_conn, content_id))
+        sentences = build_sentences(runs, split_on_punctuation([[word.text for word in words] for _, words in runs]))
+    return sentences

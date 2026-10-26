@@ -16,15 +16,7 @@ import textwrap
 
 import helpers.database as db
 from helpers.speakers import describe_label
-from helpers.transcripts import (
-    build_sentences,
-    content_link,
-    hms,
-    parse_seconds,
-    speaker_runs,
-    split_on_punctuation,
-    update_transcripts,
-)
+from helpers.transcripts import content_link, content_sentences, hms, parse_seconds, update_transcripts
 
 PARAGRAPH_WORDS = 80  # a speaker's sentences are put in paragraphs of about this many words
 
@@ -52,10 +44,7 @@ def main() -> int:
             sys.exit(f"Content {content.id} is not transcribed")
         diarization_id = db.get_transcription_diarization(db_conn, content.id)
         labels = db.get_speaker_labels(db_conn, diarization_id) if diarization_id else {}
-        sentences = db.get_sentences(db_conn, content.id)
-        if not sentences:
-            runs = speaker_runs(db.get_words_with_speakers(db_conn, content.id))
-            sentences = build_sentences(runs, split_on_punctuation([[word.text for word in words] for _, words in runs]))
+        sentences = content_sentences(db_conn, content.id)
 
     wanted = None
     if args.speaker:

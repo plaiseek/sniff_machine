@@ -1,7 +1,7 @@
 """Check the model servers listed in servers.py.
 
     python3.11 check_servers.py                     # every server
-    python3.11 check_servers.py whisper pyannote    # only these kinds (or steps: transcribe, diarize)
+    python3.11 check_servers.py whisper pyannote    # only these kinds (or steps: transcribe, diarize, ask)
 
 Prints one line per server: OK, BUSY (its only worker is busy, or the model is still loading:
 work sent to it waits), LOADING or DOWN. Exits with 1 if a server of the requested kinds is DOWN.
@@ -18,8 +18,9 @@ KINDS = {
     "pyannote": servers.PYANNOTE_SERVERS,
     "speechbrain": servers.SPEECHBRAIN_SERVERS,
     "wtpsplit": servers.WTPSPLIT_SERVERS,
+    "vllm": servers.VLLM_SERVERS,
 }
-STEP_KINDS = {"transcribe": "whisper", "diarize": "pyannote", "embed": "speechbrain", "split": "wtpsplit"}
+STEP_KINDS = {"transcribe": "whisper", "diarize": "pyannote", "embed": "speechbrain", "split": "wtpsplit", "ask": "vllm"}
 
 kinds = [STEP_KINDS.get(arg, arg) for arg in sys.argv[1:]] or list(KINDS)
 if unknown := [kind for kind in kinds if kind not in KINDS]:
@@ -32,9 +33,12 @@ for kind in dict.fromkeys(kinds):
         down += 1
     for address in KINDS[kind]:
         try:
-            r = requests.get(f"http://{address}/health", timeout=5)
+            # vLLM answers /health with no body: its models are on /v1/models (OpenAI API)
+            r = requests.get(f"http://{address}/v1/models" if kind == "vllm" else f"http://{address}/health", timeout=5)
             r.raise_for_status()
             answer = r.json()
+            if kind == "vllm":
+                answer = {"model": ", ".join(card["id"] for card in answer["data"])}
             # Servers that answer /health while they work say so (e.g. pyannote since Phase 4)
             status = "BUSY" if answer.get("busy") else "OK"
             if model := answer.get("model"):
@@ -47,7 +51,7 @@ for kind in dict.fromkeys(kinds):
             else:
                 status = f"DOWN (HTTP {e.response.status_code})"
                 down += 1
-        except (requests.exceptions.RequestException, ValueError) as e:
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError) as e:
             status = f"DOWN ({type(e).__name__})"
             down += 1
         print(f"{kind:12} {address:22} {status}")

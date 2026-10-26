@@ -202,6 +202,51 @@ END""",
 END""",
         "CREATE INDEX sentences_by_diarization ON sentences(diarization_id)",
     ],
+    # v7: questions asked to an LLM about the transcriptions (ask_transcripts.py), and the passages
+    # it found: leads to listen to, not verdicts
+    [
+        """CREATE TABLE questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,                        -- the question, with its criteria
+    speaker TEXT NOT NULL DEFAULT '',          -- only the sentences of the labels named so; '' = anyone
+    model TEXT NOT NULL,                       -- as the vLLM server names it
+    settings TEXT NOT NULL,                    -- JSON (params_key()): prompt version, window sizes, thinking
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE (text, speaker, model, settings)
+)""",
+        """CREATE TABLE question_contents (            -- the question was asked on the whole transcription of a content
+    question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    content_id INTEGER NOT NULL REFERENCES transcriptions(content_id) ON DELETE CASCADE,
+    diarization_id INTEGER REFERENCES diarizations(id) ON DELETE SET NULL,  -- the speakers it was shown; NULL = none
+    windows INTEGER NOT NULL,                  -- transcript windows read in the first pass
+    candidates INTEGER NOT NULL,               -- passages checked in the second pass
+    prompt_tokens INTEGER NOT NULL,            -- tokens read and written by the LLM, both passes
+    completion_tokens INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (question_id, content_id)
+)""",
+        """CREATE TABLE findings (                      -- a passage the LLM checked, whatever its verdict
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL,
+    content_id INTEGER NOT NULL,
+    first_idx INTEGER NOT NULL,                -- its words: words.idx from first_idx to last_idx
+    last_idx INTEGER NOT NULL CHECK (last_idx >= first_idx),
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL,
+    speakers TEXT,                             -- the labels of its sentences when asked, e.g. 'SPEAKER_01'; NULL = unknown
+    verdict TEXT NOT NULL CHECK (verdict IN ('yes', 'unsure', 'no')),
+    confidence REAL,                           -- the LLM's, from 0 to 1
+    attribution TEXT,                          -- 'own words', 'quoting, reading or reporting' or 'unclear'
+    quote TEXT,                                -- the words the LLM says match
+    quote_found INTEGER NOT NULL,              -- 1: the quote is in the transcription of the passage
+    explanation TEXT,                          -- why, from the second pass
+    screening TEXT,                            -- why the first pass picked it
+    FOREIGN KEY (question_id, content_id) REFERENCES question_contents(question_id, content_id) ON DELETE CASCADE,
+    UNIQUE (question_id, content_id, first_idx)
+)""",
+        "CREATE INDEX question_contents_by_content ON question_contents(content_id)",
+        "CREATE INDEX question_contents_by_diarization ON question_contents(diarization_id)",
+    ],
 ]
 
 # The columns migration v2 copies when it rebuilds contents and files
@@ -970,6 +1015,96 @@ ORDER BY t.content_id"""
     ).fetchall()
     wanted = None if content_ids is None else set(content_ids)
     return [content_id for content_id, in rows if wanted is None or content_id in wanted]
+
+
+def add_question(db_conn: sqlite3.Connection, text: str, speaker: str | None, model: str, settings: dict) -> int:
+    """The id of a question asked with this model and settings, added if new. speaker: only the
+    sentences of the labels named so can match (None: anyone's)."""
+    key = (text, speaker or "", model, params_key(settings))
+    with db_conn:
+        # Not INSERT OR IGNORE: it would use up an id each time the question is asked again
+        db_conn.execute(
+            """INSERT INTO questions (text, speaker, model, settings) SELECT ?, ?, ?, ?
+WHERE NOT EXISTS (SELECT 1 FROM questions WHERE text = ? AND speaker = ? AND model = ? AND settings = ?)""",
+            key + key,
+        )
+    return db_conn.execute(
+        "SELECT id FROM questions WHERE text = ? AND speaker = ? AND model = ? AND settings = ?", key
+    ).fetchone()[0]
+
+
+def find_questions(db_conn: sqlite3.Connection, text: str, speaker: str | None) -> list[tuple]:
+    """(id, model, settings, created_at) of the questions with this text and speaker, newest first."""
+    return db_conn.execute(
+        "SELECT id, model, settings, created_at FROM questions WHERE text = ? AND speaker = ? ORDER BY id DESC",
+        (text, speaker or ""),
+    ).fetchall()
+
+
+def question_done(db_conn: sqlite3.Connection, question_id: int, content_id: int) -> bool:
+    """Whether the question was asked on the words of a content as they are aligned now (a new
+    diarization changes who says them)."""
+    row = db_conn.execute(
+        """SELECT q.diarization_id IS t.diarization_id FROM question_contents q
+JOIN transcriptions t ON t.content_id = q.content_id WHERE q.question_id = ? AND q.content_id = ?""",
+        (question_id, content_id),
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def replace_findings(
+    db_conn: sqlite3.Connection,
+    question_id: int,
+    content_id: int,
+    state: tuple,
+    windows: int,
+    candidates: int,
+    tokens: tuple[int, int],
+    findings: list[tuple],
+) -> None:
+    """Store what a question found in a content, read from its words as they were in `state`
+    (get_transcription_state()), in place of what it found before, in one transaction: (first_idx,
+    last_idx, start_ms, end_ms, speakers, verdict, confidence, attribution, quote, quote_found,
+    explanation, screening) rows, and the (prompt, completion) tokens spent. Raises RuntimeError if
+    the words changed meanwhile: ask again."""
+    with db_conn:
+        # The findings go with it (cascade); writing first takes the write lock before the check
+        db_conn.execute("DELETE FROM question_contents WHERE question_id = ? AND content_id = ?", (question_id, content_id))
+        if get_transcription_state(db_conn, content_id) != tuple(state):
+            raise RuntimeError(f"The words of content {content_id} changed while the question was asked: ask again")
+        db_conn.execute(
+            """INSERT INTO question_contents (question_id, content_id, diarization_id, windows, candidates, prompt_tokens, completion_tokens)
+VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (question_id, content_id, state[1], windows, candidates, *tokens),
+        )
+        db_conn.executemany(
+            """INSERT INTO findings (question_id, content_id, first_idx, last_idx, start_ms, end_ms, speakers, verdict, confidence,
+attribution, quote, quote_found, explanation, screening) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [(question_id, content_id, *finding) for finding in findings],
+        )
+
+
+def get_findings(db_conn: sqlite3.Connection, question_id: int, content_ids: list[int] | None = None, verdicts=("yes", "unsure")) -> list[tuple]:
+    """(content_id, diarization_id, first_idx, last_idx, start_ms, end_ms, speakers, verdict, confidence,
+    attribution, quote, quote_found, explanation, screening) of what a question found, oldest
+    content first. diarization_id: the one whose labels `speakers` are (None: none, or deleted since)."""
+    query = f"""SELECT f.content_id, q.diarization_id, f.first_idx, f.last_idx, f.start_ms, f.end_ms, f.speakers, f.verdict,
+f.confidence, f.attribution, f.quote, f.quote_found, f.explanation, f.screening
+FROM findings f JOIN question_contents q ON q.question_id = f.question_id AND q.content_id = f.content_id
+JOIN contents c ON c.id = f.content_id
+WHERE f.question_id = ? AND f.verdict IN ({', '.join('?' for _ in verdicts)})"""
+    rows = db_conn.execute(query + " ORDER BY c.upload_date, c.id, f.start_ms", (question_id, *verdicts)).fetchall()
+    wanted = None if content_ids is None else set(content_ids)
+    return [row for row in rows if wanted is None or row[0] in wanted]
+
+
+def get_words_text(db_conn: sqlite3.Connection, content_id: int, first_idx: int, last_idx: int) -> str:
+    """The stored words of a content from first_idx to last_idx, joined with spaces."""
+    return " ".join(
+        text for text, in db_conn.execute(
+            "SELECT text FROM words WHERE content_id = ? AND idx BETWEEN ? AND ? ORDER BY idx", (content_id, first_idx, last_idx)
+        )
+    )
 
 
 def write_atomic(path: pathlib.Path, text: str) -> None:

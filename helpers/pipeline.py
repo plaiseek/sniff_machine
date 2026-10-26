@@ -59,6 +59,10 @@ class Step:
     is_done: Callable[[sqlite3.Connection, db.Content], bool]
     run: Callable[[sqlite3.Connection, str, db.Content, Path | None], str]
     needs_audio: bool = True  # False: run gets no wav (None), and none is prepared for this step
+    # Worker threads per server: a server that batches requests (vLLM) takes several contents at once.
+    # If it drops their connections (it crashed), the other workers of the server take them back at
+    # once and they fail a second time: re-run to retry them
+    workers: int = 1
 
 
 @dataclass
@@ -183,10 +187,11 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
         if len(servers) < len(step.servers):
             log(f"Warning: a server is listed more than once for the {name} step, it gets one worker.")
     # Per step: the items waiting for a worker, as (i, content, wav path, servers that failed it),
-    # the items being worked on, the servers whose worker still runs, and their failures in a row
+    # the items being worked on, the servers whose workers still run (once per worker), and their
+    # failures in a row
     pending = [[] for _ in steps]
     busy = [0 for _ in steps]
-    alive = [list(servers) for servers in addresses]
+    alive = [[s for s in servers for _ in range(step.workers)] for step, servers in zip(steps, addresses)]
     errors = [dict.fromkeys(servers, 0) for servers in addresses]
     last_error = [dict.fromkeys(servers, 0.0) for servers in addresses]  # time.monotonic()
     tries = {}  # (step index, content id) -> [(server, error, how)]: its failed tries, see failure()
@@ -369,6 +374,7 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
         threading.Thread(target=worker, args=(k, server), daemon=True)
         for k, servers in enumerate(addresses)
         for server in servers
+        for _ in range(steps[k].workers)
     ]
     for w in workers:
         w.start()
