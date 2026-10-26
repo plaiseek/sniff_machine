@@ -12,6 +12,9 @@ Sniff Machine downloads videos and audios (YouTube, Twitch, French TV and radio,
 | `servers.py` | addresses of the model servers; `check_servers.py` checks them |
 | `helpers/` | shared code: `database.py` (schema, migrations, queries), `pipeline.py` (steps run on the servers), `jobs.py`, `yt_dlp.py`, one client and one server module per model |
 | `cache/` | the database and every downloaded or computed file |
+| `criteria/` | criteria files for `ask_transcripts.py --criteria` (e.g. hateful speech under French law) |
+| `tests/` | tests without GPU, network or Docker: `python3.11 -m unittest discover tests` |
+| `PLAN.md`, `docs/` | what is still to do; the media to add (`docs/sources.md`); the October 2026 review with the design of every phase (`docs/history/`) |
 | `.claude/skills/*/SKILL.md` | step-by-step procedures (see below) |
 
 ## Skills
@@ -34,4 +37,5 @@ Before doing one of these tasks, read the matching `SKILL.md` and follow it step
 - Never name a speaker yourself (from a title, a channel name or a transcript): only the user says who a diarization label is (`enroll_speaker.py`), and automatic names are reported as guesses with their similarity. `enroll_speaker.py --forget` is for the user to run.
 - Never run a `run_*_servers.py` script while `check_servers.py` says its servers are OK or BUSY: it restarts them and kills the work in progress.
 - Long commands (jobs, server builds) run in the background with a log file; check the log instead of waiting.
+- After changing `helpers/`, run `python3.11 -m unittest discover tests`: every test must pass.
 - Do not commit `cache/`, `hf.token` or job logs.

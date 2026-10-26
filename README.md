@@ -62,7 +62,7 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
 3. **Python Dependencies**:
    ```bash
-   python3.11 -m pip install sqlite-vec yt-dlp docker requests numpy
+   python3.11 -m pip install -r requirements.txt
    ```
 
 4. **JS runtime for yt-dlp**:
@@ -166,34 +166,14 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 - In Claude Code, [.claude/hooks/protect_data.py](.claude/hooks/protect_data.py) (registered in [.claude/settings.json](.claude/settings.json)) blocks the usual ways an agent could destroy `cache/test.db` or `cache/backups/`: deleting, moving or copying over them (also from inside `cache/`), `git clean` with `-x`, any use of the `sqlite3` command line on the database without `-readonly`, and `enroll_speaker.py --forget`.
 - The skills were tested with a small model on sandbox copies of the repository, with fake servers and fake channels: requests in English and French, relative dates ("la semaine dernière"), re-diarization with a speaker count, a server down, an ambiguous date (the agent asks), a failing content (retried once, then reported), single URLs, questions on the database and an export script. A local model (e.g. through `ollama launch`) needs a context of at least 64k tokens to hold a skill and a job's output.
 
-## TODO
+## Tests
 
-See [PLAN.md](PLAN.md) for the full review and the phased improvement plan (bug fixes, DB migrations, SpeechBrain embedding server, speaker identification, new sources).
+```bash
+python3.11 -m unittest discover tests
+```
 
-1. Find a way to retrieve (or scrap) videos list of france.tv etc...
+No GPU, network or Docker needed: the migrations on a database of their own, and `ask_transcripts.py`'s question step against a fake vLLM server ([tests/fake_vllm.py](tests/fake_vllm.py)): requests at once, the KV-cache limit, a window cut then read in halves, an empty answer asked again, an error that cancels the rest, resuming.
 
-### Potential medias
+## Roadmap
 
-### Television
-- `bfmtv`
-- `bfmtv:article`
-- `bfmtv:live`
-- `LCI`
-- `LCP (currently broken)`
-- `franceinfo`
-- `francetv`
-- `TF1`
-- `TV5MONDE`
-
-### Press & Digital Media
-- `Lemonde`
-- `LeFigaroVideoEmbed`
-- `LeFigaroVideoSection`
-- `20min: (Currently broken)`
-
-### Public Radio
-- `RadioFranceLive`
-- `RadioFrancePodcast`
-- `RadioFranceProfile`
-- `RadioFranceProgramSchedule`
-*(Covers France Info, RFI, France Inter, etc.)*
+[PLAN.md](PLAN.md) lists what is still to do (and links the October 2026 review, with the design of every phase), and [docs/sources.md](docs/sources.md) the French media to add.
