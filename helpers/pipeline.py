@@ -5,10 +5,10 @@
                                   diarization_step(servers.PYANNOTE_SERVERS)])
     sys.exit(report.exit_code())
 
-The main thread prepares the 16 kHz mono wav of each content (downloading its audio if needed),
-while one worker thread per server runs a step on the wavs already prepared (a step that needs no
-audio, such as the sentence split, gets none). Every step is idempotent: what is already in the
-database is skipped, so re-running a script resumes it.
+The main thread prepares the 16 kHz mono wav of each content (downloading its audio, or its full
+video when asked, if needed), while one worker thread per server runs a step on the wavs already
+prepared (a step that needs no audio, such as the sentence split, gets none). Every step is
+idempotent: what is already in the database is skipped, so re-running a script resumes it.
 
 A content is tried at most twice per step: an error hands it to another server of the step, a
 dropped connection (the server crashed, e.g. out of memory on a long audio) hands it back while
@@ -39,6 +39,10 @@ SERVER_RETURN_TIMEOUT_S = 300
 # it back
 MAX_CONSECUTIVE_FAILURES = 3
 RETRY_FAILING_SERVER_S = 300
+# Downloads from a platform stop for the rest of a run once it refuses this machine (bot check,
+# rate limit), or after that many download errors in a row (e.g. an IP block that only answers
+# HTTP 403, or no network): every other request would fail too, and may prolong a block
+MAX_DOWNLOAD_FAILURES_IN_A_ROW = 3
 
 _print_lock = threading.Lock()
 
@@ -74,17 +78,20 @@ class Report:
     failed: dict = field(default_factory=dict)  # step name -> [(content, exception)]
     not_run: dict = field(default_factory=dict)  # step name -> [content]: no server left
     stuck: list = field(default_factory=list)  # servers that did not answer within the upload timeout
+    stopped: dict = field(default_factory=dict)  # platform -> (why its downloads stopped, [contents not downloaded])
 
     def failures(self) -> int:
         return (
             len(self.failed_preparations)
             + sum(map(len, self.failed.values()))
             + sum(map(len, self.not_run.values()))
+            + sum(len(contents) for _, contents in self.stopped.values())
         )
 
     def exit_code(self) -> int:
-        """5 a server is probably stuck, 1 some contents failed, 0 everything done."""
-        return 5 if self.stuck else 1 if self.failures() else 0
+        """5 a server is probably stuck, 6 downloads from a platform were stopped (run again later,
+        not now), 1 some contents failed, 0 everything done."""
+        return 5 if self.stuck else 6 if self.stopped else 1 if self.failures() else 0
 
 
 def transcription_step(whisper_servers: list[str], language: str = "fr") -> Step:
@@ -156,24 +163,52 @@ def sentence_step(wtpsplit_servers: list[str]) -> Step:
 
 
 def prepare_wav(db_conn: sqlite3.Connection, content: db.Content) -> Path:
-    """The 16 kHz mono wav of a content, rebuilt (re-downloading its audio if needed) when it is
-    not registered or no longer on disk. The mp3 is only needed to build the wav."""
+    """The 16 kHz mono wav of a content, rebuilt when it is not registered or no longer on disk:
+    from its mp3, else from its video, else from its mp3 downloaded now. The mp3 and the video are
+    only needed to build the wav."""
     from helpers.yt_dlp import get_ytdlp_content_mp3
 
     wav_path = db.get_existing_content_file(db_conn, content.id, "16k_mono_wav")
     if wav_path is None:
-        mp3_path = get_ytdlp_content_mp3(db_conn, content.url, content)
+        # The mp3 first: a wav made from the video starts some 40 ms apart from one made from the
+        # mp3 (another encoding), which would shift the times already computed from it
+        source_path = (
+            db.get_existing_content_file(db_conn, content.id, "ytdlp_audio")
+            or db.get_existing_content_file(db_conn, content.id, "ytdlp_video")
+            or get_ytdlp_content_mp3(db_conn, content.url, content)
+        )
         wav_path = Path(f"cache/16k_mono_wav/{content.platform}_{content.external_id}.wav")
-        convert_to_16k_mono_wav(mp3_path, wav_path, verbose=False)
+        convert_to_16k_mono_wav(source_path, wav_path, verbose=False)
         db.add_content_file(db_conn, wav_path, content.id, "16k_mono_wav")
     return wav_path
 
 
-def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
+def _audio_on_disk(db_conn: sqlite3.Connection, content: db.Content) -> bool:
+    """Whether prepare_wav() can make the wav of a content without downloading anything."""
+    return any(
+        db.get_existing_content_file(db_conn, content.id, file_type) is not None
+        for file_type in ("16k_mono_wav", "ytdlp_audio", "ytdlp_video")
+    )
+
+
+def run_steps(
+    contents: list[db.Content], steps: list[Step], video: bool = False, audio: bool | None = None
+) -> Report:
     """Prepare the wav of every content that still needs a step, and run the steps on them.
-    With no step, only the wavs are prepared (audio download + conversion). A content whose steps
-    are all done is skipped even if its audio was deleted since (e.g. to free disk space)."""
+    `video`: first download the full video of every content that has none (helpers/yt_dlp.py
+    VIDEO_DIR), and make the wavs from it instead of downloading an mp3; a content whose video
+    fails goes on with an mp3. `audio`: prepare the wav of every content, even of those that need no
+    step (by default only with no step and no video: the audio download). A content with nothing
+    left to do is skipped even if its audio was deleted since (e.g. to free disk space)."""
+    from helpers.yt_dlp import download_failure, get_ytdlp_content_video
+
+    if unmounted := db.unmounted_cache_links():
+        raise RuntimeError(f"Nothing done: {'; '.join(unmounted)}")
+    audio = not steps and not video if audio is None else audio
     report = Report(contents=len(contents))
+    if video:
+        # Reported like a step
+        report.done["video download"], report.failed["video download"] = [], []
     # Steps may share a name (e.g. two diarizations with different params): the report tells them apart
     names = []
     for step in steps:
@@ -197,6 +232,31 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
     tries = {}  # (step index, content id) -> [(server, error, how)]: its failed tries, see failure()
     cond = threading.Condition()  # guards all of the above
     preparation_done = threading.Event()
+    failures_in_a_row = {}  # platform -> its download errors in a row that may concern every content
+
+    def download_failed(content: db.Content, e: Exception) -> None:
+        """Stop the downloads from the platform of a content once it refuses this machine."""
+        platform, kind = content.platform, download_failure(e)
+        if kind == "content":  # the platform answered: the errors before were not about every content
+            failures_in_a_row[platform] = 0
+        elif kind == "download":
+            failures_in_a_row[platform] = failures_in_a_row.get(platform, 0) + 1
+        if platform in report.stopped:
+            return
+        message = str(e).splitlines()[0] if str(e) else type(e).__name__
+        if kind == "blocked":
+            why = message
+        elif failures_in_a_row.get(platform, 0) >= MAX_DOWNLOAD_FAILURES_IN_A_ROW:
+            why = f"{MAX_DOWNLOAD_FAILURES_IN_A_ROW} download errors in a row, the last: {message}"
+        else:
+            return
+        report.stopped[platform] = (why, [])
+        log(f"Downloads from {platform} stopped for this run: {why}")
+
+    def not_downloaded(content: db.Content) -> None:
+        contents = report.stopped[content.platform][1]
+        if not contents or contents[-1] is not content:
+            contents.append(content)
 
     def log_prefix(i):
         n = max(len(contents), 1)
@@ -384,17 +444,40 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
             for i, content in enumerate(contents, 1):
                 try:
                     pending_steps = [k for k, step in enumerate(steps) if not step.is_done(db_conn, content)]
-                    audio_missing = not steps and (
+                    audio_missing = audio and (
                         db.get_existing_content_file(db_conn, content.id, "16k_mono_wav") is None
                     )
-                    if not pending_steps and not audio_missing:
+                    video_missing = video and (
+                        db.get_existing_content_file(db_conn, content.id, "ytdlp_video") is None
+                    )
+                    if not pending_steps and not audio_missing and not video_missing:
                         log(f"{log_prefix(i)} Already done: {content.url}")
                         report.already_done += 1
                         continue
+                    if video_missing and content.platform in report.stopped:
+                        not_downloaded(content)
+                    elif video_missing:
+                        # Before the wav, which is then made from it: the workers wait for the
+                        # download, but no mp3 is downloaded
+                        try:
+                            video_path = get_ytdlp_content_video(db_conn, content.url, content)
+                            failures_in_a_row[content.platform] = 0
+                            report.done["video download"].append(content)
+                            log(f"{log_prefix(i)} Video downloaded: {video_path} ({video_path.stat().st_size / 1e6:.0f} MB)")
+                        except Exception as e:
+                            report.failed["video download"].append((content, e))
+                            log(f"{log_prefix(i)} Failed to download the video of '{content.url}':\n{e}")
+                            download_failed(content, e)
                     # Only the steps that need it get the audio: the others never download it
-                    needs_audio = not steps or any(steps[k].needs_audio for k in pending_steps)
+                    needs_audio = audio_missing or any(steps[k].needs_audio for k in pending_steps)
+                    downloads_audio = needs_audio and not _audio_on_disk(db_conn, content)
+                    if downloads_audio and content.platform in report.stopped:
+                        not_downloaded(content)  # none of its steps run, as when its wav fails
+                        continue
                     wav_path = prepare_wav(db_conn, content) if needs_audio else None
-                    if not pending_steps:
+                    if downloads_audio:
+                        failures_in_a_row[content.platform] = 0
+                    if not pending_steps and wav_path is not None:
                         log(f"{log_prefix(i)} Audio ready: {wav_path}")
                     with cond:
                         for k in pending_steps:
@@ -403,6 +486,7 @@ def run_steps(contents: list[db.Content], steps: list[Step]) -> Report:
                 except Exception as e:
                     report.failed_preparations.append((content, e))
                     log(f"{log_prefix(i)} Failed to prepare the wav of '{content.url}':\n{e}")
+                    download_failed(content, e)
     finally:
         with cond:
             preparation_done.set()
@@ -436,12 +520,16 @@ def print_report(report: Report) -> None:
             for content in not_run:
                 print(f"  {content.url}")
     done = ", ".join(f"{len(contents)} {plural(name)}" for name, contents in report.done.items())
+    not_tried = sum(len(contents) for _, contents in report.stopped.values())
     print(
         f"Summary: {report.contents} contents, {report.already_done} already done"
         + (f", done now: {done}" if done else "")
-        + f", {report.failures()} failures."
+        + f", {report.failures() - not_tried} failures"
+        + (f", {not_tried} not tried (downloads stopped)" if not_tried else "")
+        + "."
     )
     print_stuck(report)
+    print_stopped(report)
 
 
 def print_stuck(report: Report) -> None:
@@ -450,3 +538,20 @@ def print_stuck(report: Report) -> None:
             f"Server {server} did not answer within {uploads.TIMEOUT_BASE_S // 3600} h: it is probably stuck"
             " and needs a restart. Do not run this again before."
         )
+
+
+def print_stopped(report: Report) -> None:
+    for platform, (why, contents) in report.stopped.items():
+        if "not a bot" in why.lower() or "captcha" in why.lower():
+            # Seen on YouTube after an hour of downloads at full speed: 2 to more than 12 hours
+            when = (
+                "The platform asks this machine to prove it is not a bot, for hours, and longer when it is"
+                " asked again: run this again tomorrow, not before, and check first with one request:"
+                " python3.11 -m yt_dlp --simulate --print title <URL of a video>"
+            )
+        else:
+            when = (
+                "Run this again later, not now: if the platform refuses this machine, every new request may"
+                " prolong it (a YouTube rate limit lasts up to an hour)."
+            )
+        print(f"Downloads from {platform} stopped ({why}): {len(contents)} contents left without their download. {when}")

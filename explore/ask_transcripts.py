@@ -25,6 +25,8 @@ findings.csv (for a spreadsheet: ";" between columns, UTF-8 with a BOM), questio
 and its criteria) and clips/ (an mp3 of each passage, a few seconds wider, cut from the content's
 audio when it is still on disk). --question ID: with --show, that question when the same text was
 also asked with another model or settings (.claude/skills/findings-dossier/questions.py lists them).
+--show prints the passages that match (YES) and the unsure ones; --yes-only only those that match,
+--all the rejected ones too.
 
 --clients, --kv-tokens, --tokens-per-s: what each vLLM server can do (defaults below). Each server
 gets --clients requests at once, the contents that started first going first, never more than its
@@ -75,6 +77,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="say what would be read, without the LLM")
     parser.add_argument("--show", action="store_true", help="print what was found, without the LLM")
     parser.add_argument("--all", action="store_true", help="also print the passages the LLM judged not to match")
+    parser.add_argument("--yes-only", action="store_true", help="with --show: only the passages that match, not the unsure ones")
     parser.add_argument("--export", type=Path, metavar="DIR", help="also write the findings printed, with an audio clip of each, to DIR")
     parser.add_argument("--question", dest="question_id", type=int, metavar="ID", help="with --show: this question, not the newest one with this text")
     parser.add_argument("--clients", type=int, default=CLIENTS, help=f"requests at once per server (default {CLIENTS})")
@@ -87,6 +90,8 @@ def main() -> int:
         parser.error("--export writes the findings: use it with --show or a real run, not --dry-run")
     if args.question_id and not args.show:
         parser.error("--question only goes with --show")
+    if args.yes_only and (args.all or not args.show):
+        parser.error("--yes-only only goes with --show, without --all")
     question, criteria = args.question.strip(), ""
     if args.criteria:
         try:
@@ -141,7 +146,7 @@ def main() -> int:
                     sys.exit(f"Question {args.question_id} does not have this text, criteria and speaker")
             question_id, model, _, created_at = asked[0]
             print(f"Question {question_id}, asked with {model} since {created_at}" + (f" ({len(asked) - 1} older settings or models)" if len(asked) > 1 else ""))
-            return print_findings(db_conn, question_id, selected, args.all, args.export)
+            return print_findings(db_conn, question_id, selected, args.all, args.export, args.yes_only)
 
         if args.dry_run:
             from helpers.questions import CONTEXT_WORDS, windows
@@ -181,8 +186,10 @@ def main() -> int:
     return report.exit_code()
 
 
-def print_findings(db_conn, question_id: int, contents: list[db.Content], show_all: bool, export_dir: Path | None = None) -> int:
-    verdicts = ("yes", "unsure", "no") if show_all else ("yes", "unsure")
+def print_findings(
+    db_conn, question_id: int, contents: list[db.Content], show_all: bool, export_dir: Path | None = None, yes_only: bool = False
+) -> int:
+    verdicts = ("yes", "unsure", "no") if show_all else ("yes",) if yes_only else ("yes", "unsure")
     by_id = {content.id: content for content in contents}
     rows = db.get_findings(db_conn, question_id, list(by_id), verdicts)
     asked = db_conn.execute(
@@ -226,9 +233,15 @@ def print_findings(db_conn, question_id: int, contents: list[db.Content], show_a
         f" {counts['yes']} passages match, {counts['unsure']} unsure, {counts['no']} checked and rejected"
     )
     lead = ". These are leads to listen to, not verdicts."
-    print(f"\n{summary}" + ("" if show_all else " (--all prints them)") + lead)
+    if show_all:
+        printed = exported = ""
+    elif yes_only:
+        printed, exported = " (only those that match are printed)", " (only those that match are in this export)"
+    else:
+        printed, exported = " (--all prints them)", " (not in this export)"
+    print(f"\n{summary}{printed}{lead}")
     if export_dir:
-        export_findings(db_conn, question_id, found, summary + ("" if show_all else " (not in this export)") + lead, export_dir)
+        export_findings(db_conn, question_id, found, summary + exported + lead, export_dir)
     return 0
 
 

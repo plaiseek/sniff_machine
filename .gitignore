@@ -5,3 +5,4 @@ jobs/*.log
 __pycache__
 exports
 local_servers.yaml
+*cookies*.txt

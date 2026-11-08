@@ -24,7 +24,7 @@ First check whether the `pipeline-job` skill covers the request: selecting listi
 ```python
 import helpers.database as db          # the database: writes always go through these functions; reads may also use db_conn.execute("SELECT ...")
 import servers                         # server address lists: servers.WHISPER_SERVERS, PYANNOTE_SERVERS, ...
-from helpers.yt_dlp import list_contents, get_ytdlp_content
+from helpers.yt_dlp import list_contents, get_ytdlp_content, get_ytdlp_content_video
 from helpers.pipeline import prepare_wav, run_steps, transcription_step, diarization_step, embedding_step, sentence_step, Step
 ```
 
@@ -35,7 +35,8 @@ from helpers.pipeline import prepare_wav, run_steps, transcription_step, diariza
 | `list_contents(db_conn, listing_url, uploaded_from=None, uploaded_to=None)` | list a channel / playlist and register its contents (network): `(contents, skipped)`, `skipped` = `[(url, reason, is_error)]` |
 | `get_ytdlp_content(db_conn, url)` | the `db.Content` of one URL, registered if new (network the first time) |
 | `db.get_existing_content_file(db_conn, content.id, file_type, variant="")` | `Path` of a registered file still on disk, else `None` |
-| `prepare_wav(db_conn, content)` | the content's 16 kHz mono wav, downloading the audio if needed |
+| `prepare_wav(db_conn, content)` | the content's 16 kHz mono wav, made from its mp3 or else its video, downloading the mp3 if it has neither |
+| `get_ytdlp_content_video(db_conn, content.url, content)` | `Path` of the content's full video (at most 720p, under `cache/ytdlp_video/`: the video disk), downloaded if needed (network); raises when the video disk is missing or has less than 20 GB left. For many contents use `run_steps(contents, [], video=True)` (what `pipeline/download_videos.py` does): `video=True` downloads the videos first in any `run_steps` call, and the wavs are then made from them |
 | `run_steps(contents, [transcription_step(servers.WHISPER_SERVERS, "fr"), diarization_step(servers.PYANNOTE_SERVERS, {"num_speakers": 2})])` | download, then transcribe / diarize on every server kept (see below) in parallel, skipping what is done; returns a report. Then store the words: see the code below the table |
 | `db.get_diarization_id(db_conn, content.id, model, params)`, `db.get_turns(db_conn, diarization_id, exclusive=True)` | a stored diarization and its turns (`speaker`, `start_ms`, `end_ms`, `overlap_ms`); `model` is the `diarizations.model` column (or the first value `assert_pyannote_servers()` returns), `params` a dict (`{}` by default) |
 | `run_steps(diarized_contents, [embedding_step(servers.SPEECHBRAIN_SERVERS)])` | voice embeddings of the exclusive turns, in a later `run_steps` call than the diarization (the steps of one call run side by side) |
@@ -62,7 +63,7 @@ with db.connect() as db_conn:
 sys.exit(report.exit_code() or (1 if failures else 0))
 ```
 
-`report.exit_code()` is 0 (everything done), 1 (some contents failed: re-run to retry them) or 5 (a server is probably stuck: tell the user, do not re-run).
+`report.exit_code()` is 0 (everything done), 1 (some contents failed: re-run to retry them), 5 (a server is probably stuck: tell the user, do not re-run) or 6 (a platform refused this machine while downloading audio or videos, and the downloads from it stopped: re-run later, not now; `print_report` says why).
 
 Building a step (`transcription_step(...)`, ...) checks its servers and keeps only those that answer: always build it from the `servers.X_SERVERS` list, never pass addresses to `Step()` yourself. A listed server that does not answer is left out (`Warning: <Kind> server <address> is not ready, it is left out: <reason>`, then `<Kind>: N of M servers used: <addresses>`); a busy or loading one is kept, and work sent to it waits. It exits (`SystemExit`, exit code 1 in a script) when no listed server answers (`No <Kind> server of [...] is ready`), when none is listed, when every server kept stays busy for 600 s (`No <Kind> server answered /health within 600 s`: they work for another job, run it again later) or when they run different models: build the steps before any long work, as `pipeline/split_sentences.py` does (`helpers/jobs.py` catches it and exits with 4). The `assert_*_servers()` functions behind the steps return `(model, ready addresses)` (Whisper: the addresses only).
 

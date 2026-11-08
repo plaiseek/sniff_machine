@@ -107,7 +107,7 @@ Report to the user: the number of contents asked, the contents left out with the
 
 ## 6. Hand the findings over
 
-When the user wants them as files (for a lawyer), add `--export` to the `--show` command (with `--all`, the rejected passages are exported too: only when the user asks):
+When the user wants them as files (for a lawyer), add `--export` to the `--show` command (with `--yes-only`, only the YES passages; with `--all`, the rejected passages too: each only when the user asks):
 
 ```bash
 python3.11 explore/ask_transcripts.py "QUESTION" --criteria criteria/haine_loi_1881.txt --uploader Psyhodelik --uploaded-from <UPLOADED_FROM> --show --export exports/<today>_<short_name>

@@ -25,7 +25,7 @@ Run every script from the repository root, as `python3.11 <folder>/<script>.py`:
 A SQLite database (`cache/test.db`, see [helpers/database.py](helpers/database.py): `connect()`, and the queries of [helpers/tables/](helpers/tables/)) keeps track of:
 
 - **`contents`**: every video/audio content sniffed (platform, external id, URL, title, duration, uploader, channel id, series, upload date). Only the platform, external id and URL are mandatory; metadata an extractor does not give is `NULL` (except the title: yt-dlp substitutes a generic one).
-- **`files`**: files produced for each content (`ytdlp_info`, `ytdlp_audio`, `ytdlp_subtitles`, `16k_mono_wav`, `whisper_result`, ...), stored under `cache/`.
+- **`files`**: files produced for each content (`ytdlp_info`, `ytdlp_audio`, `ytdlp_video`, `ytdlp_subtitles`, `16k_mono_wav`, `whisper_result`, ...), stored under `cache/` (its data folders are links to another disk, see the setup).
 - **`diarizations`**, **`turns`**, **`turn_embeddings`**: diarization runs of a content, their speaker turns, and one voice embedding per turn and model.
 - **`speakers`**, **`speaker_samples`** (+ **`sample_embeddings`**), **`speaker_labels`**: named people, reference ranges of their voice, and who each diarization label is (set by a person, or by `speakers/identify_speakers.py` with its similarity). Deleting a speaker deletes everything derived from their voice.
 - **`transcriptions`**, **`words`**, **`sentences`** (+ the full-text index **`sentences_fts`**): the words of each transcription (text, normalised form, time, probability) with the speaker turn each one falls in (the content's latest diarization), and their sentences, never across two speakers.
@@ -88,6 +88,13 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
 
 5. **Hugging Face token** (for Pyannote only): accept the conditions of [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1), then put your token in a `hf.token` file at the root of the project. It is only used by a throwaway stage of the image build to download the model: it never appears in the build logs, and neither the final image nor the containers contain it (they load the model offline).
 
+6. **Data disk**: the bulky folders of `cache/` (`16k_mono_wav`, `ytdlp_audio`, `ytdlp_video`, `whisper_result`, `pyannote_result`, `ytdlp_info`, `speaker_clips`) can live on another disk, each through a link `cache/<folder>` to a folder there, made once on each machine. The database (`cache/test.db`, `cache/backups/`) and `cache/locks/` stay on the machine's own disk. The full videos (`"video"` in a job's `STEPS`, `pipeline/download_videos.py`: 0.25 to 0.7 GB per hour of video, at most 720p) need `cache/ytdlp_video`:
+   ```bash
+   mkdir "/media/<user>/<disk>/sniff_cache/ytdlp_video"
+   ln -s "/media/<user>/<disk>/sniff_cache/ytdlp_video" cache/ytdlp_video
+   ```
+   To move a folder that already holds files, with nothing running: copy it (`rsync -rt cache/<folder>/ "<disk folder>/<folder>/"`), check the copy (`rsync -rc --dry-run -i ...` prints nothing), rename the original, make the link, check, then delete the original. The paths in the database stay `cache/<folder>/<file>`: no row changes, and moving to yet another disk only means copying and pointing the links there. The scripts never create these folders: while their disk is not mounted (e.g. after a reboot, until a desktop login mounts it), jobs stop with exit code 2 and the pipeline scripts with an error, instead of filling the disk of `cache/` or doing again work whose files they cannot see. A download does not start with less than 20 GB left on the video disk. Names avoid the characters exFAT forbids.
+
 ## Usage
 
 1. **Create the database** (optional: every script creates or migrates it when it connects):
@@ -114,20 +121,21 @@ curl -F file=@cache/16k_mono_wav/<content>.wav \
    ```bash
    python3.11 jobs/<name>.py
    ```
-   With `DRY_RUN = True` (the template's default) it only lists the selected contents and what is already done for them. With `DRY_RUN = False` it downloads their audio (mp3, then a 16 kHz mono wav), transcribes and/or diarizes them (storing the words of the transcriptions in the database, each with its speaker turn), with `"embed"` in `STEPS` computes the voice embeddings of the diarized turns once the diarizations are done, and with `"split"` cuts the transcriptions into sentences: each step is spread over all its servers in parallel while the next audios download. Every step is skipped when its result is already in the database, so re-running a job resumes it. The job ends with the list of failures (exit code 1) and one line per content showing what is stored for it.
+   With `DRY_RUN = True` (the template's default) it only lists the selected contents and what is already done for them. With `DRY_RUN = False` it downloads their full video with `"video"` in `STEPS` (on the video disk, then a 16 kHz mono wav made from it), or else their audio (mp3, then a 16 kHz mono wav), transcribes and/or diarizes them (storing the words of the transcriptions in the database, each with its speaker turn), with `"embed"` in `STEPS` computes the voice embeddings of the diarized turns once the diarizations are done, and with `"split"` cuts the transcriptions into sentences: each step is spread over all its servers in parallel while the next audios download. Every step is skipped when its result is already in the database, so re-running a job resumes it. To keep YouTube from rate-limiting this machine, the requests about videos to one site are spaced 10 to 20 s apart (`REQUEST_INTERVAL_S` in [helpers/yt_dlp.py](helpers/yt_dlp.py)); and the videos download at most 2 MB/s (`VIDEO_MAX_BYTES_PER_S`: at full speed, YouTube's bot check refused this machine after about an hour, for 2 to more than 12 hours). When a platform refuses this machine anyway (bot check, rate limit, HTTP 429, or 3 download errors in a row), the downloads from it stop for the rest of the run, which ends with exit code 6: run it again later, not right away (the next day after a bot check). The job ends with the list of failures (exit code 1) and one line per content showing what is stored for it.
 
    For example, "fetch, transcribe and diarize the videos of @name uploaded in March 2026":
    ```python
    LISTING_URLS = ["https://www.youtube.com/@name/videos"]
    UPLOADED_FROM = "2026-03-01"
    UPLOADED_TO = "2026-03-31"
-   STEPS = ["download", "transcribe", "diarize"]
+   STEPS = ["video", "transcribe", "diarize"]
    ```
 
 5. **Or run a script** on what is already in the database:
 
-   - [pipeline/transcript_pending_audios.py](pipeline/transcript_pending_audios.py) transcribes every content with an audio file (`16k_mono_wav` or `ytdlp_audio`) and no `whisper_result`, e.g. after an interrupted job or failed transcriptions. Contents without audio (e.g. subtitles only) are left out.
-   - [pipeline/diarize_contents.py](pipeline/diarize_contents.py) diarizes every content with an audio file and no diarization yet for the server's model and the script's `params` (e.g. `{"num_speakers": 2}`). Each run is stored as a `diarizations` row with all its `turns` (regular and exclusive, with the overlapped speech of each turn), and the server's raw answer is kept in `cache/pyannote_result/`.
+   - [pipeline/transcript_pending_audios.py](pipeline/transcript_pending_audios.py) transcribes every content with an audio or video file (`16k_mono_wav`, `ytdlp_audio` or `ytdlp_video`) and no `whisper_result`, e.g. after an interrupted job or failed transcriptions. Contents without audio (e.g. subtitles only) are left out.
+   - [pipeline/diarize_contents.py](pipeline/diarize_contents.py) diarizes every content with an audio or video file and no diarization yet for the server's model and the script's `params` (e.g. `{"num_speakers": 2}`). Each run is stored as a `diarizations` row with all its `turns` (regular and exclusive, with the overlapped speech of each turn), and the server's raw answer is kept in `cache/pyannote_result/`.
+   - [pipeline/download_videos.py](pipeline/download_videos.py) downloads the full videos of the contents already in the database to the video disk, oldest first (ids, `--uploader`, `--from`/`--to` to select some; `--dry-run` counts them, with the hours and the space left; `--category`, `--skip-category`, `--tag` select by YouTube category and tag; `--newest-first` starts with the latest uploads; `--max-rate` sets the speed limit in MB/s; `--cookies youtube_cookies.txt` signs the downloads in to a YouTube account, a throwaway one: YouTube may ban an account that downloads this much).
    - [pipeline/store_words.py](pipeline/store_words.py) stores the words of every transcription not stored yet, and aligns them to the diarizations made since (no server needed). The transcription and diarization scripts and the jobs do it too.
    - [pipeline/split_sentences.py](pipeline/split_sentences.py) cuts the stored words of each content into runs of one speaker, then into sentences with wtpsplit (`--punctuation`: after `. ? ! …`, no server).
    - [pipeline/embed_speaker_turns.py](pipeline/embed_speaker_turns.py) computes the voice embedding (SpeechBrain) of every exclusive turn of every diarization that has none yet for the server's model, one request per content. Turns shorter than 1 s get a `NULL` embedding, so that they are not sent again.

@@ -28,6 +28,20 @@ from helpers.tables.transcriptions import *  # noqa: F401, F403
 db_path = pathlib.Path("cache/test.db")
 
 
+def unmounted_cache_links() -> list[str]:
+    """Why the folders of cache/ that are links to another disk cannot be used: their target is
+    missing (that disk is not mounted). Their files then look deleted, and a step that finds its
+    result by its file (the transcription) would do it all again."""
+    cache = db_path.parent
+    if not cache.is_dir():
+        return []
+    return [
+        f"{link} links to '{os.readlink(link)}', which does not exist: is its disk mounted?"
+        for link in sorted(cache.iterdir())
+        if link.is_symlink() and not link.is_dir()
+    ]
+
+
 # Only one thread of a process migrates (the backup cannot run inside the migration's transaction),
 # and once it failed, the other threads of the process do not retry it (nor back up again)
 _migration_lock = threading.Lock()

@@ -12,7 +12,7 @@ description: Prepares what an LLM found in the transcriptions (explore/ask_trans
 - **The findings are leads, not evidence of an offence.** They are what an LLM thinks of an automatic transcription. Never write that a person said or did something on the strength of a finding, and never tell the user that something is an offence: that is for the lawyer.
 - **Never name a speaker yourself.** The dossier shows the diarization labels (`SPEAKER_01`), with a name only as the database gives it: set by a person (`human`) or guessed from the voice (`auto, 0.92`, to report as a guess). Naming a label is the `speaker-identity` skill, and the user's decision.
 - **The folder stays on this machine.** Never upload, email or copy it anywhere else: the user hands it over. The clips are voice recordings of real people.
-- Export YES and UNSURE (the default). Add `--all` (the rejected passages too) only when the user asks.
+- Export YES and UNSURE (the default). Add `--yes-only` when the user asks for the passages that match only (the YES ones), and `--all` (the rejected passages too) only when the user asks.
 - Never change the findings, the database or a criteria file to change what the dossier says.
 
 ## 1. Find the question
@@ -38,7 +38,7 @@ Below, `<arguments>` stands for the arguments `questions.py N` printed (question
 python3.11 explore/ask_transcripts.py <arguments> <selection> --show
 ```
 
-It uses no server and writes nothing. It prints `N contents selected` (and how many were left out: not transcribed, no words), `Question N, asked with MODEL since ...`, then each finding under a `Content ID (date): title` line, and ends with `Asked on N of M contents (...): N passages match, N unsure, N checked and rejected`. If no passage matches and none is unsure, tell the user and stop. If it stops earlier:
+It uses no server and writes nothing. It prints `N contents selected` (and how many were left out: not transcribed, no words), `Question N, asked with MODEL since ...`, then each finding under a `Content ID (date): title` line, and ends with `Asked on N of M contents (...): N passages match, N unsure, N checked and rejected` (these counts are those of every verdict, also with `--yes-only`). If no passage matches and none is unsure, tell the user and stop. If it stops earlier:
 - `This question (with these criteria and speaker) was never asked`, or `Question N does not have this text, criteria and speaker`: an argument differs from step 1: take them from `questions.py N` again.
 - `No content matches the selection`: the selection options match no content: check them, or ask the user.
 - `0 contents selected (... left out: not transcribed, no words)` and nothing else: no content of the selection is transcribed: tell the user (the `pipeline-job` skill transcribes them) and stop.
@@ -50,7 +50,7 @@ It uses no server and writes nothing. It prints `N contents selected` (and how m
 python3.11 explore/ask_transcripts.py <arguments> <selection> --show --export exports/<today>_<short_name>
 ```
 
-`<today>` is `date +%F`; `<short_name>` uses lowercase letters, digits and `_` (e.g. `exports/2026-10-26_psyhodelik_haine`). `exports/` is ignored by git: never commit it. The output ends with `Exported N findings to DIR: findings.md, findings.csv, question.txt, clips/`, then a `No clip for the findings of content N: <why>` line for each content where some or all findings got no clip (its audio is no longer on disk: a `pipeline-job` job with `STEPS = ["download"]` alone downloads it again, then export again; its audio ends before the passage; or ffmpeg failed): those findings have a link but no clip (`findings.md` says `Clip: none (...)` for each); say so in the report. `Nothing exported to DIR: no content selected has words`: the selection holds no transcribed content. Exporting again to the same folder rewrites it (the old clips are removed). `--export` does not go with `--dry-run`.
+`<today>` is `date +%F`; `<short_name>` uses lowercase letters, digits and `_` (e.g. `exports/2026-10-26_psyhodelik_haine`). `exports/` is ignored by git: never commit it. The output ends with `Exported N findings to DIR: findings.md, findings.csv, question.txt, clips/`, then a `No clip for the findings of content N: <why>` line for each content where some or all findings got no clip (its audio is no longer on disk: if `ls cache/16k_mono_wav/ | head -1` fails, the data disk is not mounted, tell the user; otherwise a `pipeline-job` job with `STEPS = ["download"]` alone downloads it again, then export again; its audio ends before the passage; or ffmpeg failed): those findings have a link but no clip (`findings.md` says `Clip: none (...)` for each); say so in the report. `Nothing exported to DIR: no content selected has words`: the selection holds no transcribed content. Exporting again to the same folder rewrites it (the old clips are removed). `--export` does not go with `--dry-run`.
 
 ## 5. Check and report
 

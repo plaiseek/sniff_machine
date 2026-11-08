@@ -3,8 +3,9 @@
 Copied from jobs/job_template.py: only the settings below were edited. Run it from the repository
 root with `python3.11 jobs/<this file>.py` (`--status` only says whether it is running). Re-running it
 resumes: what is already in the database is skipped. Exit codes: 0 done, 1 some contents failed
-(re-run to retry them), 2 invalid settings, 3 already running, 4 no server of a step can
-be used, 5 a server is probably stuck (it needs a restart).
+(re-run to retry them), 2 invalid settings (or the video disk missing), 3 already running, 4 no
+server of a step can be used, 5 a server is probably stuck (it needs a restart), 6 downloads
+stopped: a platform refuses this machine for now (re-run later, not now).
 """
 
 # ======================== Settings: edit only these lines ========================
@@ -21,14 +22,17 @@ CONTENT_URLS = []
 UPLOADED_FROM = None
 UPLOADED_TO = None
 
-# What to do: "download" (audio), "transcribe" (whisper), "diarize" (pyannote: who speaks when),
-# "embed" (speechbrain: voice embeddings of the diarized turns, run after "diarize", which
-# speakers/identify_speakers.py needs), "split" (wtpsplit: the transcription in sentences, each of one
-# speaker, run after "transcribe" and "diarize"; needs no audio). The words of the transcriptions
-# are stored in the database by any job that transcribes, diarizes or splits. The audio is always
-# downloaded when another step needs it. ["download"] alone also fetches again the audio deleted
-# from cache/ of contents already transcribed or diarized.
-STEPS = ["download", "transcribe", "diarize"]
+# What to do: "video" (the full video, at most 720p, to cache/ytdlp_video: a link to the video
+# disk; the audio is then made from it, no mp3 is downloaded), "download" (audio), "transcribe"
+# (whisper), "diarize" (pyannote: who speaks when), "embed" (speechbrain: voice embeddings of the
+# diarized turns, run after "diarize", which speakers/identify_speakers.py needs), "split" (wtpsplit:
+# the transcription in sentences, each of one speaker, run after "transcribe" and "diarize"; needs
+# no audio). The words of the transcriptions are stored in the database by any job that
+# transcribes, diarizes or splits. The audio is always downloaded when another step needs it.
+# ["download"] alone also fetches again the audio deleted from cache/ of contents already
+# transcribed or diarized. "video" downloads the video of each content before its audio: the
+# servers wait for it.
+STEPS = ["video", "transcribe", "diarize"]
 
 # Transcription language: a 2-letter code ("fr", "en", ...) or "auto"
 LANGUAGE = "fr"

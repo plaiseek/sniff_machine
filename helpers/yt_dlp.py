@@ -1,12 +1,60 @@
 import datetime
+import glob
 import itertools
 import json
 import os
+import random
 import re
+import shutil
+import threading
+import time
+import urllib.parse
 import yt_dlp
 from pathlib import Path
 
 import helpers.database as db
+
+
+# Requests about one video (details, audio, video, subtitles) to a site start at least this many
+# seconds apart, at random in this range: YouTube rate-limits a session that asks for videos too
+# fast, for up to an hour. yt-dlp's `-t sleep` waits as long before each download; here the wait
+# also comes before each video's details (a channel's first listing asks for hundreds in a row),
+# and a download that lasted longer adds none. Only within one process: two scripts downloading
+# at once ask twice as fast
+REQUEST_INTERVAL_S = (10, 20)
+_last_requests = {}  # site -> time.monotonic() of its last request about a video
+_pace_lock = threading.Lock()
+
+
+def _pace(url: str) -> None:
+    """Wait, if needed, before a request about the video at `url` (REQUEST_INTERVAL_S)."""
+    site = re.sub(r"^(www|m)\.", "", urllib.parse.urlparse(url).hostname or "")
+    with _pace_lock:
+        last = _last_requests.get(site)
+        if last is not None:
+            time.sleep(max(0.0, last + random.uniform(*REQUEST_INTERVAL_S) - time.monotonic()))
+        _last_requests[site] = time.monotonic()
+
+
+# The errors of a platform that refuses this machine for a while, whatever the video: YouTube's
+# bot check ("Sign in to confirm you're not a bot"; not "Sign in to confirm your age", which is the
+# video's), captcha and rate limit ("This content isn't available, try again later. The current
+# session has been rate-limited..."), and HTTP 429 from any site
+_BLOCKED = ("not a bot", "captcha", "rate-limited", "try again later", "http error 429", "too many requests")
+
+
+def download_failure(e: Exception) -> str:
+    """What a failed yt-dlp request says about the next ones to its platform: "blocked" (it refuses
+    this machine for a while: they would fail too, and may prolong it), "content" (it refuses this
+    video only: removed, private, members only, geo-blocked), "download" (another yt-dlp error,
+    e.g. the network, HTTP 403) or "other" (not a yt-dlp error, e.g. the disk, ffmpeg)."""
+    if not isinstance(e, yt_dlp.utils.DownloadError):
+        return "other"
+    # Before `expected`: yt-dlp marks the rate limit and the bot check as expected too
+    if any(s in str(e).lower() for s in _BLOCKED):
+        return "blocked"
+    original = e.exc_info[1] if e.exc_info else e
+    return "content" if getattr(original, "expected", False) else "download"
 
 
 def _upload_date(info: dict) -> str | None:
@@ -37,6 +85,7 @@ def add_ytdlp_content(
     with yt_dlp.YoutubeDL(
         {"quiet": True, "noplaylist": True, "extract_flat": "in_playlist"}
     ) as ydl:
+        _pace(url)
         info = ydl.extract_info(url, download=False)
 
         if info.get("_type") in ("playlist", "multi_video"):
@@ -147,6 +196,7 @@ def get_ytdlp_content_mp3(
                 ],
             }
         ) as ydl:
+            _pace(url)
             ydl.download([url])
 
     try:
@@ -165,6 +215,101 @@ def get_ytdlp_content_mp3(
         raise ValueError(f"yt-dlp did not produce '{mp3_path}'")
     db.add_content_file(db_conn, mp3_path, content.id, "ytdlp_audio")
     return mp3_path
+
+
+# The full videos: a folder, or a link to a folder on a disk with room for them (README.md), made
+# by hand on each machine and never created here: a link to a disk that is not mounted must not
+# fill the disk of cache/ instead
+VIDEO_DIR = Path("cache/ytdlp_video")
+# yt-dlp's format_sort (-S): at most 720p and 30 fps (0.25 to 0.7 GB per hour on YouTube; 1080p60
+# takes about three times as much), H.264 and AAC, which merge into an mp4 that any player reads.
+# The audio track is the original language, as for the mp3
+VIDEO_FORMAT_SORT = ["res:720", "fps:30", "ext:mp4:m4a"]
+VIDEO_MIN_FREE_BYTES = 20 * 10**9  # a download does not start with less free space on the video disk
+# Download speed of the videos, in bytes per second (None: no limit). At full speed (5 to 7 MB/s),
+# YouTube's bot check ("Sign in to confirm you're not a bot") refused this machine after 13 to 23 GB,
+# about an hour, whatever the number of videos (37 to 126) and their spacing (REQUEST_INTERVAL_S),
+# then for 2 to more than 12 hours: 3.5 GB per hour in all. 2 MB/s is 7 GB per hour
+VIDEO_MAX_BYTES_PER_S = 2 * 10**6
+# The cookies of a YouTube account (Netscape format) sent with the video downloads, or None: set by
+# pipeline/download_videos.py --cookies. yt-dlp writes the cookies YouTube renews back to the file
+COOKIE_FILE = None
+
+
+def video_dir_problem() -> str | None:
+    """Why videos cannot be downloaded (VIDEO_DIR missing, or its disk not mounted), or None."""
+    if VIDEO_DIR.is_dir():
+        return None
+    if VIDEO_DIR.is_symlink():
+        return f"{VIDEO_DIR} links to '{os.readlink(VIDEO_DIR)}', which does not exist: is its disk mounted?"
+    return (
+        f"{VIDEO_DIR} does not exist: link it to a folder on a disk with room for the videos "
+        f"(ln -s <folder> {VIDEO_DIR}, see README.md)"
+    )
+
+
+def get_ytdlp_content_video(
+    db_conn: db.sqlite3.Connection,
+    url: str,
+    content: db.Content | None = None,
+) -> Path:
+    """The full video of a content (VIDEO_FORMAT_SORT), downloaded to VIDEO_DIR unless it is there."""
+    if content is None:
+        content = get_ytdlp_content(db_conn, url)
+
+    video_path = db.get_existing_content_file(db_conn, content.id, "ytdlp_video")
+    if video_path is not None:
+        return video_path
+    if (problem := video_dir_problem()) is not None:
+        raise RuntimeError(problem)
+    free = shutil.disk_usage(VIDEO_DIR).free
+    if free < VIDEO_MIN_FREE_BYTES:
+        raise RuntimeError(f"Only {free / 1e9:.0f} GB left on the disk of {VIDEO_DIR}: video not downloaded")
+
+    # Video disks are often exFAT, which forbids : ? " | * < > \ in file names. Only those are
+    # replaced: two contents must never share a name, the leftovers of one are deleted below
+    stem = re.sub(r'[\\/:*?"<>|]', "_", f"{content.platform}_{content.external_id}")
+
+    def download(video_format: str) -> Path:
+        # Leftovers of an earlier attempt (X.f136.mp4.part, X.f140.m4a.part, X.mp4.part, .ytdl...):
+        # an HLS retry may reuse a name for another format and append to it, start from scratch
+        for leftover in VIDEO_DIR.glob(f"{glob.escape(stem)}.*"):
+            leftover.unlink()
+        with yt_dlp.YoutubeDL(
+            {
+                "quiet": True,
+                "noprogress": True,  # the progress bar floods logs (one update every few ms)
+                "noplaylist": True,
+                "format": video_format,
+                "format_sort": VIDEO_FORMAT_SORT,
+                "merge_output_format": "mp4/mkv",  # mkv when the streams do not fit in an mp4
+                # A missing fragment would leave a hole, which shifts every time of a wav made from it
+                "skip_unavailable_fragments": False,
+                "ratelimit": VIDEO_MAX_BYTES_PER_S,
+                **({"cookiefile": str(COOKIE_FILE)} if COOKIE_FILE else {}),
+                # The extension is the format's: a single format (Twitch, YouTube's pre-muxed ones)
+                # is not converted
+                "outtmpl": str(VIDEO_DIR / f"{stem}.%(ext)s"),
+            }
+        ) as ydl:
+            _pace(url)
+            info = ydl.extract_info(url, download=True)
+        # yt-dlp gives an absolute path: registered relative to the repository, as every file
+        return VIDEO_DIR / Path(info["requested_downloads"][0]["filepath"]).name
+
+    try:
+        video_path = download("bv*+ba/b")
+    except yt_dlp.utils.DownloadError as e:
+        # As for the mp3: some YouTube videos answer 403 to every direct format, but not through HLS
+        if "HTTP Error 403" not in str(e):
+            raise
+        print(f"{url}: HTTP 403 on the direct formats, downloading the video through HLS", flush=True)
+        video_path = download("bv*[protocol^=m3u8]+ba[protocol^=m3u8]/b[protocol^=m3u8]")
+
+    if not video_path.is_file():
+        raise ValueError(f"yt-dlp did not produce '{video_path}'")
+    db.add_content_file(db_conn, video_path, content.id, "ytdlp_video")
+    return video_path
 
 
 def get_ytdlp_content_srt(
@@ -206,6 +351,7 @@ def get_ytdlp_content_srt(
             "outtmpl": str(srt_path)[: -(5 + len(lang))],
         }
     ) as ydl:
+        _pace(url)
         ydl.download([url])
 
     if not srt_path.is_file():
@@ -322,6 +468,34 @@ def _backfill_channel(db_conn: db.sqlite3.Connection, content: db.Content) -> db
     return db.get_content(db_conn, content.id)
 
 
+def select_by_details(
+    db_conn: db.sqlite3.Connection,
+    contents: list[db.Content],
+    categories: list[str] = (),
+    skip_categories: list[str] = (),
+    tags: list[str] = (),
+) -> tuple[list[db.Content], int]:
+    """The contents in one of `categories` (if any), in none of `skip_categories`, and with one of
+    `tags` (if any), as their stored yt-dlp details give them (YouTube's categories and tags, as
+    the uploader set them; case-insensitive), and how many had no details on disk: those are
+    in no category and have no tag."""
+    wanted, skipped, wanted_tags = ({x.casefold() for x in names} for names in (categories, skip_categories, tags))
+    selected, unknown = [], 0
+    for content in contents:
+        info_path = db.get_existing_content_file(db_conn, content.id, "ytdlp_info")
+        if info_path is None:
+            unknown += 1
+            info = {}
+        else:
+            with open(info_path, encoding="utf-8") as f:
+                info = json.load(f)
+        its_categories = {x.casefold() for x in info.get("categories") or []}
+        its_tags = {x.casefold() for x in info.get("tags") or []}
+        if (not wanted or its_categories & wanted) and not its_categories & skipped and (not wanted_tags or its_tags & wanted_tags):
+            selected.append(content)
+    return selected, unknown
+
+
 def _is_temporary(e: Exception) -> bool:
     """Whether an extraction error may go away on a later run (network, rate limit), rather than
     being the platform's answer for this content (removed, private, geo-blocked, age-restricted)."""
@@ -376,6 +550,7 @@ def list_contents(
     last = datetime.date.fromisoformat(uploaded_to) if uploaded_to else datetime.date.max
     today = datetime.datetime.now(datetime.timezone.utc).date()
     contents, skipped = [], []
+    blocked = None  # the error of a platform that refused this machine: no more details are asked
 
     with yt_dlp.YoutubeDL(_LISTING_OPTIONS) as ydl:
         newest_first = _is_newest_first(listing_url)
@@ -417,12 +592,15 @@ def list_contents(
             print(f"  {name}: {len(candidates)} entries to check")
 
             # Pass 2: the exact upload dates
-            older = 0
+            older, not_fetched = 0, 0
             for i, entry in enumerate(candidates, 1):
                 entry_url = entry.get("url") or entry.get("webpage_url")
                 content = db.get_content_from_url(db_conn, entry_url)
                 if content is None and entry.get("ie_key") and entry.get("id"):
                     content = db.get_content_from_external_id(db_conn, entry["ie_key"], entry["id"])
+                if content is None and blocked is not None:
+                    not_fetched += 1  # the entries already in the database are still selected
+                    continue
                 if content is None:
                     print(f"  ({i}/{len(candidates)}) Fetching the details of {entry_url}...")
                     try:
@@ -430,6 +608,9 @@ def list_contents(
                     except Exception as e:  # e.g. private, members only, removed, geo-blocked, network
                         message = str(e).splitlines()[0] if str(e) else type(e).__name__
                         skipped.append((entry_url, message, _is_temporary(e)))
+                        if download_failure(e) == "blocked":
+                            blocked = message
+                            print(f"  The platform refuses this machine for now: the details of the other entries are not fetched")
                         continue
                 else:
                     content = _backfill_channel(db_conn, content)
@@ -450,4 +631,7 @@ def list_contents(
                 else:
                     older = 0
                     contents.append(content)
+            if not_fetched:
+                reason = f"{not_fetched} entries not checked, the platform refuses this machine for now ({blocked}): run again later"
+                skipped.append((listing_url, reason, True))
     return contents, skipped

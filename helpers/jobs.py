@@ -1,12 +1,14 @@
 """Run a job: select contents (listings such as channels, and/or single URLs, optionally by upload
-date), then download, transcribe and/or diarize them, and/or compute the voice embeddings of their
-diarized turns, and/or split their transcriptions into sentences. A job that transcribes, diarizes
-or splits also stores the words of the transcriptions in the database, with their speaker turns.
+date), then download (their audio and/or full video), transcribe and/or diarize them, and/or
+compute the voice embeddings of their diarized turns, and/or split their transcriptions into
+sentences. A job that transcribes, diarizes or splits also stores the words of the transcriptions
+in the database, with their speaker turns.
 Job scripts (jobs/*.py, copied from jobs/job_template.py) only hold settings and call run_job().
 
 Exit codes: 0 everything done, 1 some contents failed (re-run the job to retry them),
 2 invalid settings, 3 the same job is already running, 4 no server of a step can be used (none
-answers, all busy too long, or they run different models), 5 a server is probably stuck.
+answers, all busy too long, or they run different models), 5 a server is probably stuck,
+6 downloads from a platform were stopped (it refuses this machine for now: run the job again later).
 """
 
 import datetime
@@ -17,7 +19,7 @@ from pathlib import Path
 import helpers.database as db
 import servers
 
-STEPS = ("download", "transcribe", "diarize", "embed", "split")
+STEPS = ("download", "video", "transcribe", "diarize", "embed", "split")
 
 
 def _check_settings(listing_urls, content_urls, uploaded_from, uploaded_to, steps, language, diarization_params) -> list[str]:
@@ -39,8 +41,15 @@ def _check_settings(listing_urls, content_urls, uploaded_from, uploaded_to, step
         errors.append(f"UPLOADED_FROM ({uploaded_from}) is after UPLOADED_TO ({uploaded_to})")
     if (uploaded_from or uploaded_to) and not listing_urls:
         errors.append("UPLOADED_FROM/UPLOADED_TO only filter LISTING_URLS: give a listing, or no dates")
+    unmounted = db.unmounted_cache_links()
+    errors += [f"Nothing can run: {problem}" for problem in unmounted]
     if not isinstance(steps, (list, tuple)) or not steps or any(s not in STEPS for s in steps):
         errors.append(f"STEPS must be a non-empty list of {list(STEPS)}, got {steps!r}")
+    elif "video" in steps and not unmounted:  # a link to a disk not mounted is reported once, above
+        from helpers.yt_dlp import video_dir_problem
+
+        if (problem := video_dir_problem()) is not None:
+            errors.append(f'STEPS has "video", but the videos have nowhere to go: {problem}')
     if not isinstance(language, str) or not (language == "auto" or (len(language) == 2 and language.isalpha())):
         errors.append(f"LANGUAGE must be a 2-letter code such as 'fr', or 'auto', got {language!r}")
     if not isinstance(diarization_params, dict):
@@ -79,9 +88,10 @@ def _lock(job_path: Path):
 def print_contents(db_conn, contents: list[db.Content], diarization_params: dict | None = None) -> None:
     """One line per content: what is already stored for it."""
     params = db.params_key(diarization_params)
-    print(f"{'id':>6}  {'uploaded':10}  {'duration':>8}  {'audio':5}  {'transcript':10}  {'diarization':18}  {'voices':6}  {'sentences':9}  title")
+    print(f"{'id':>6}  {'uploaded':10}  {'duration':>8}  {'audio':5}  {'video':5}  {'transcript':10}  {'diarization':18}  {'voices':6}  {'sentences':9}  title")
     for c in contents:
         audio = "yes" if db.get_existing_content_file(db_conn, c.id, "16k_mono_wav") else "no"
+        video = "yes" if db.get_existing_content_file(db_conn, c.id, "ytdlp_video") else "no"
         transcript = "yes" if db.get_existing_content_file(db_conn, c.id, "whisper_result") else "no"
         row = db_conn.execute(
             """SELECT COUNT(DISTINCT speaker), COUNT(*) FROM turns WHERE exclusive = 1 AND diarization_id =
@@ -110,7 +120,7 @@ EXISTS (SELECT 1 FROM words w WHERE w.content_id = t.content_id) FROM transcript
         sentences = "-" if split is None or not split[2] else "yes" if split[0] and split[1] else "no"
         duration = "?" if c.duration_s is None else str(datetime.timedelta(seconds=round(c.duration_s)))
         print(
-            f"{c.id:>6}  {(c.upload_date or '?')[:10]:10}  {duration:>8}  {audio:5}  {transcript:10}  {diarization:18}  {voices:6}  {sentences:9}  {(c.title or '')[:60]}"
+            f"{c.id:>6}  {(c.upload_date or '?')[:10]:10}  {duration:>8}  {audio:5}  {video:5}  {transcript:10}  {diarization:18}  {voices:6}  {sentences:9}  {(c.title or '')[:60]}"
         )
 
 
@@ -121,6 +131,7 @@ EXIT_CODES = {
     3: "this job is already running",
     4: "no server of a step can be used (see the line above), nothing done",
     5: "a server is probably stuck (see above): tell the user, it needs a restart, do not run the job again before",
+    6: "downloads from a platform were stopped (see the line above): run the job again later, not now",
 }
 
 
@@ -161,7 +172,7 @@ def _run_job(
     diarization_params: dict | None = None,
     dry_run: bool = False,
 ) -> int:
-    from helpers.pipeline import diarization_step, embedding_step, print_stuck, run_steps, sentence_step, transcription_step
+    from helpers.pipeline import diarization_step, embedding_step, print_stopped, print_stuck, run_steps, sentence_step, transcription_step
     from helpers.yt_dlp import get_ytdlp_content, list_contents
 
     diarization_params = {} if diarization_params is None else diarization_params
@@ -232,10 +243,11 @@ def _run_job(
         return 1 if n_errors else 0
 
     # With GPU steps, the audio is only fetched for the contents that still need one: audio deleted
-    # from cache/ to free disk space does not come back (STEPS = ["download"] alone fetches it)
+    # from cache/ to free disk space does not come back (STEPS = ["download"] alone fetches it).
+    # "video" downloads the video of every content, before its audio, which is then made from it
     reports = []
-    if gpu_steps or "download" in steps:
-        reports.append(run_steps(contents, gpu_steps))
+    if gpu_steps or "download" in steps or "video" in steps:
+        reports.append(run_steps(contents, gpu_steps, video="video" in steps, audio="download" in steps and not gpu_steps))
     word_failures = []
     if "transcribe" in steps or "diarize" in steps or "split" in steps:
         # The words of the transcriptions, each with its turn of the latest diarization
@@ -265,6 +277,9 @@ def _run_job(
         print(f"{len(skipped)} listing entries or URLs were skipped ({n_errors} errors), see above.")
     for report in reports:
         print_stuck(report)  # again, next to the final line that the agent reads
+        print_stopped(report)
     if any(report.stuck for report in reports):
         return 5
+    if any(report.stopped for report in reports):
+        return 6
     return 1 if any(report.failures() for report in reports) or word_failures or n_errors else 0
