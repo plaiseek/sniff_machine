@@ -6,19 +6,31 @@ import helpers.docker as dk
 # not the token times (start, end, t_dtw), as v1.9.5 does: check it again before changing the pin
 WHISPER_CPP_TAG = "v1.9.5"
 WHISPER_CPP_COMMIT = "d1be6fde11ac6e0407606b4e42fe72d34add8037"
+# Commits of whisper.cpp's master added on top of the release, until a release has them. a46fadb
+# (#4096, 2026-10-19): with --dtw, a 30 s window that advanced only a few frames aborted the server
+# ("WHISPER_ASSERT: src/whisper.cpp:9136: filter_width < a->ne[2]", container exit code 139)
+WHISPER_CPP_PATCHES = ["a46fadb36a9bbaf40021c5135fb3ee34cca6a42b"]
+# ROCm 6.4.2 is the first to support the RDNA 4 GPUs (Radeon AI PRO R9700, gfx1201): on 6.3 they
+# transcribed no faster than an RX 7900 GRE. The other servers' rocm/pytorch:latest already run a
+# ROCm 7 user space on the same drivers
+ROCM_IMAGE = "rocm/dev-ubuntu-22.04:7.2.4-complete"
 
 
 def build_whisper_image(
-    gfx_version="11.0.0", ggml_model="large-v3", vad_model="silero-v6.2.0"
+    gfx_version="11.0.0", ggml_model="large-v3", vad_model="silero-v6.2.0", base_image=ROCM_IMAGE
 ) -> None:
+    patches = "".join(
+        f" \\\n    && git -C /app fetch -q --depth=2 origin {commit} && git -C /app cherry-pick -n {commit}"
+        for commit in WHISPER_CPP_PATCHES
+    )
     dockerfile = f"""
-FROM rocm/dev-ubuntu-22.04:6.3-complete
+FROM {base_image}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \\
     git cmake make g++ python3 ca-certificates ffmpeg \\
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth=1 --branch {WHISPER_CPP_TAG} https://github.com/ggml-org/whisper.cpp /app \\
-    && test "$(git -C /app rev-parse HEAD)" = "{WHISPER_CPP_COMMIT}"
+    && test "$(git -C /app rev-parse HEAD)" = "{WHISPER_CPP_COMMIT}"{patches}
 WORKDIR /app
 RUN cmake -S . -B build \\
     -DGGML_HIP=ON \\

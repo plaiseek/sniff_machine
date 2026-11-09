@@ -17,6 +17,7 @@ whisper:
   # A machine with two gfx 12.0.1 GPUs, three servers each:
   # gpus: {0: [8070, 8071, 8072], 1: [8073, 8074, 8075]}
   # gfx_version: "12.0.1"
+  # base_image: "rocm/dev-ubuntu-22.04:6.4.4-complete"   # another ROCm for this machine's image (default: ROCM_IMAGE in helpers/whisper_amd_server.py)
 
 pyannote:
   gpus: {0: [8050]}
